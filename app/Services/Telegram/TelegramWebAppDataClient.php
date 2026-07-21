@@ -43,22 +43,52 @@ class TelegramWebAppDataClient implements TelegramWebAppDataProvider
 
     private function request(string $botUsername): string
     {
+        $internalSecret = (string) config('services.access-token.internal_secret');
+
+        if ($internalSecret === '') {
+            throw new \RuntimeException('Access-token internal secret is not configured.');
+        }
+
         $response = $this->retryPolicy->send(fn () => Http::acceptJson()
+            ->withToken($internalSecret)
+            ->withoutRedirecting()
             ->connectTimeout((int) config('services.http.connect_timeout_seconds'))
             ->timeout((int) config('services.http.timeout_seconds'))
-            ->get(rtrim((string) config('services.access-token.base_uri'), '/').'/main_web_view/', [
+            ->get(rtrim((string) config('services.access-token.base_uri'), '/').'/main_web_view', [
                 'bot_username' => $botUsername,
             ]));
 
         $response->throw();
 
-        $flat = $response->json('flat');
-        $keys = ['user', 'chat_instance', 'chat_type', 'auth_date', 'signature', 'hash'];
+        $decoded = $response->json('decoded');
 
-        if (! is_array($flat) || array_diff($keys, array_keys($flat)) !== []) {
+        if (! is_string($decoded) || ! $this->hasMandatoryAuthFields($decoded)) {
             throw new \RuntimeException('Invalid response from Telegram web app data service.');
         }
 
-        return http_build_query(array_intersect_key($flat, array_flip($keys)));
+        return $decoded;
+    }
+
+    private function hasMandatoryAuthFields(string $initData): bool
+    {
+        $values = [];
+
+        foreach (explode('&', $initData) as $parameter) {
+            if (! str_contains($parameter, '=')) {
+                return false;
+            }
+
+            [$encodedKey, $encodedValue] = explode('=', $parameter, 2);
+            $key = rawurldecode($encodedKey);
+            $values[$key][] = rawurldecode($encodedValue);
+        }
+
+        foreach (['user', 'chat_instance', 'chat_type', 'auth_date', 'signature', 'hash'] as $key) {
+            if (! isset($values[$key]) || count($values[$key]) !== 1 || $values[$key][0] === '') {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

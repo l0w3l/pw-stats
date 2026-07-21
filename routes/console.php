@@ -13,7 +13,7 @@ Artisan::command('inspire', function () {
 foreach (LeaderboardRange::cases() as $range) {
     Schedule::job(new SyncPixelWorldPlayerLeaderboards($range))
         ->name("pixel-world:leaderboard:{$range->value}")
-        ->everyTenMinutes();
+        ->cron((string) config("services.pixel-world.leaderboard_schedule.{$range->value}"));
 }
 
 Schedule::command('pixel-world:player-totals:collect')
@@ -22,7 +22,22 @@ Schedule::command('pixel-world:player-totals:collect')
     ->withoutOverlapping(1)
     ->onOneServer();
 
+Schedule::command('pixel-world:player-totals:prune')
+    ->name('pixel-world:player-totals:prune')
+    ->hourlyAt(7)
+    ->timezone('UTC')
+    ->withoutOverlapping(30)
+    ->onOneServer();
+
+Schedule::command('pixel-world:leaderboards:prune')
+    ->name('pixel-world:leaderboards:prune')
+    ->dailyAt('02:37')
+    ->timezone('UTC')
+    ->withoutOverlapping(60)
+    ->onOneServer();
+
 Schedule::command('telegram:notifications:send')
     ->name('telegram:notifications:send')
     ->everyMinute()
-    ->withoutOverlapping(60);
+    ->withoutOverlapping(1)
+    ->onOneServer();

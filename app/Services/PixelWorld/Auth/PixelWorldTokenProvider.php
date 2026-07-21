@@ -85,8 +85,12 @@ class PixelWorldTokenProvider
         $response = $this->retryPolicy->send(fn () => Http::acceptJson()
             ->connectTimeout((int) config('services.http.connect_timeout_seconds'))
             ->timeout((int) config('services.http.timeout_seconds'))
+            ->withoutRedirecting()
             ->post(rtrim((string) config('services.pixel-world.base_uri'), '/').'/auth/login/telegram-mini-apps', [
-                'web_app_data' => $this->webAppDataProvider->get('pixelworld', $refreshWebAppData),
+                'web_app_data' => $this->webAppDataProvider->get(
+                    (string) config('services.pixel-world.bot_username'),
+                    $refreshWebAppData,
+                ),
             ]));
 
         if (! $refreshWebAppData && in_array($response->status(), [400, 401, 403], true)) {

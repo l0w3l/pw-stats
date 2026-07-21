@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace App\Providers;
 
 use App\Contracts\Telegram\Sleeper;
+use App\Contracts\Telegram\TelegramChatMemberGateway;
 use App\Contracts\Telegram\TelegramRichMessageGateway;
 use App\Services\PixelWorld\Charts\ChartRenderer;
 use App\Services\PixelWorld\Charts\ImagickSvgChartRenderer;
 use App\Services\PixelWorld\Leaderboard\LeaderboardClient;
 use App\Services\PixelWorld\Leaderboard\PixelWorldLeaderboardClient;
+use App\Services\Telegram\BotApiTelegramChatMemberGateway;
 use App\Services\Telegram\NativeSleeper;
 use App\Services\Telegram\SpiritBoxRichMessageGateway;
 use App\Services\Telegram\TelegramWebAppDataClient;
@@ -27,6 +29,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(LeaderboardClient::class, PixelWorldLeaderboardClient::class);
         $this->app->bind(ChartRenderer::class, ImagickSvgChartRenderer::class);
         $this->app->bind(TelegramRichMessageGateway::class, SpiritBoxRichMessageGateway::class);
+        $this->app->bind(TelegramChatMemberGateway::class, BotApiTelegramChatMemberGateway::class);
         $this->app->bind(Sleeper::class, NativeSleeper::class);
     }
 

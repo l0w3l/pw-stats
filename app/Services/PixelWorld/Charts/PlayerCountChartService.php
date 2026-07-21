@@ -6,6 +6,7 @@ namespace App\Services\PixelWorld\Charts;
 
 use App\Data\PixelWorld\Analytics\ChartArtifact;
 use App\Data\PixelWorld\Analytics\PlayerCountChartData;
+use App\Data\PixelWorld\Analytics\PlayerCountChartPoint;
 use App\Queries\PeriodPlayerCountHistory;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
@@ -90,12 +91,14 @@ class PlayerCountChartService
         $series = [];
 
         foreach ($data->series as $item) {
-            $series[$item->range] = array_map(static fn ($point): array => [
-                $point->periodId,
-                $point->total,
-                $point->isPartial,
-                $point->collectedAt->timestamp,
-            ], $item->points);
+            $series[] = [
+                'range' => $item->range,
+                'points' => array_map(static fn (PlayerCountChartPoint $point): array => [
+                    'period' => $point->periodStart->toDateString(),
+                    'total' => $point->total,
+                    'partial' => $point->isPartial,
+                ], $item->points),
+            ];
         }
 
         $payload = json_encode([

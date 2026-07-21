@@ -11,6 +11,7 @@ use App\Data\PixelWorld\Analytics\PlayerMomentumData;
 use App\Models\PixelWorldLeaderboardPeriod;
 use App\Services\PixelWorld\Stats\LeaderboardRange;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Facades\DB;
 
 class LeaderboardAnalytics
 {
@@ -55,13 +56,20 @@ class LeaderboardAnalytics
 
             $days = $range === LeaderboardRange::Week ? 7 : 30;
 
-            foreach ($period->entries()->orderByDesc('points')->limit(5)->get() as $entry) {
+            $entries = DB::table('pixel_world_leaderboard_period_entries')
+                ->select(['player_uuid', 'nickname', 'points'])
+                ->where('period_id', $period->id)
+                ->orderByDesc('points')
+                ->limit(5)
+                ->get();
+
+            foreach ($entries as $entry) {
                 $mostActivePlayers[] = new PlayerActivityData(
                     range: $range->value,
-                    playerUuid: $entry->player_uuid,
-                    nickname: $entry->nickname,
-                    kills: $entry->points,
-                    killsPerDay: $entry->points / $days,
+                    playerUuid: (string) $entry->player_uuid,
+                    nickname: (string) $entry->nickname,
+                    kills: (int) $entry->points,
+                    killsPerDay: (int) $entry->points / $days,
                 );
             }
         }
@@ -100,39 +108,35 @@ class LeaderboardAnalytics
             return [];
         }
 
-        $previousEntries = $previous->entries()->get()->keyBy('player_uuid');
-        $players = [];
+        $entries = DB::table('pixel_world_leaderboard_period_entries as current_entries')
+            ->join(
+                'pixel_world_leaderboard_period_entries as previous_entries',
+                'previous_entries.player_uuid',
+                '=',
+                'current_entries.player_uuid',
+            )
+            ->select([
+                'current_entries.player_uuid',
+                'current_entries.nickname',
+            ])
+            ->selectRaw('current_entries.points - previous_entries.points as kills_delta')
+            ->selectRaw('previous_entries.place - current_entries.place as rank_delta')
+            ->where('current_entries.period_id', $latest->id)
+            ->where('previous_entries.period_id', $previous->id)
+            ->whereColumn('current_entries.points', '>', 'previous_entries.points')
+            ->orderByDesc('kills_delta')
+            ->orderByDesc('rank_delta')
+            ->orderBy('current_entries.player_uuid')
+            ->limit(5)
+            ->get();
 
-        foreach ($latest->entries()->get() as $entry) {
-            $previousEntry = $previousEntries->get($entry->player_uuid);
-
-            if (! $previousEntry) {
-                continue;
-            }
-
-            $killsDelta = $entry->points - $previousEntry->points;
-            $rankDelta = $previousEntry->place - $entry->place;
-
-            if ($killsDelta <= 0) {
-                continue;
-            }
-
-            $players[] = new PlayerMomentumData(
-                playerUuid: $entry->player_uuid,
-                nickname: $entry->nickname,
-                killsDelta: $killsDelta,
-                rankDelta: $rankDelta,
-            );
-        }
-
-        usort($players, fn (PlayerMomentumData $left, PlayerMomentumData $right): int => [
-            $right->killsDelta,
-            $right->rankDelta,
-        ] <=> [
-            $left->killsDelta,
-            $left->rankDelta,
-        ]);
-
-        return array_slice($players, 0, 5);
+        return $entries
+            ->map(static fn (object $entry): PlayerMomentumData => new PlayerMomentumData(
+                playerUuid: (string) $entry->player_uuid,
+                nickname: (string) $entry->nickname,
+                killsDelta: (int) $entry->kills_delta,
+                rankDelta: (int) $entry->rank_delta,
+            ))
+            ->all();
     }
 }

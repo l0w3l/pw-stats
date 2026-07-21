@@ -16,8 +16,8 @@ class SendTelegramNotifications extends Command
 
     public function handle(TelegramNotificationDispatcher $dispatcher): int
     {
-        $sent = $dispatcher->dispatch(CarbonImmutable::now('UTC')->startOfMinute());
-        $this->info("Sent {$sent} Telegram notification(s).");
+        $claimed = $dispatcher->dispatch(CarbonImmutable::now('UTC')->startOfMinute());
+        $this->info("Queued {$claimed} Telegram notification(s).");
 
         return self::SUCCESS;
     }

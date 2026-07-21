@@ -41,4 +41,26 @@ class TelegramRateLimiter
 
         return $wait;
     }
+
+    /**
+     * Publish Telegram's retry_after to all workers without blocking this one.
+     */
+    public function cooldown(int $chatId, int $seconds): void
+    {
+        $store = Cache::store((string) config('telegram_notifications.rate_limit.cache_store'));
+        $lock = $store->lock('telegram-notifications:rate-limit:reservation', 10);
+
+        try {
+            $lock->block(5, function () use ($store, $chatId, $seconds): void {
+                $until = (int) floor(microtime(true) * 1000) + (max(1, $seconds) * 1000);
+                $globalKey = 'telegram-notifications:rate-limit:global-next';
+                $chatKey = 'telegram-notifications:rate-limit:chat-next:'.$chatId;
+
+                $store->put($globalKey, max($until, (int) $store->get($globalKey, 0)), 3600);
+                $store->put($chatKey, max($until, (int) $store->get($chatKey, 0)), 3600);
+            });
+        } catch (LockTimeoutException $exception) {
+            throw new RuntimeException('Unable to publish a Telegram API rate-limit cooldown.', previous: $exception);
+        }
+    }
 }

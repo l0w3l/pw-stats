@@ -18,6 +18,9 @@ interface TelegramRichMessageGateway
         ?InlineKeyboardMarkup $keyboard = null,
     ): FailResult|Message;
 
+    /**
+     * @return FailResult|Message|true A message or true represents a successful edit/no-op.
+     */
     public function updateMessage(
         InputRichMessage $message,
         ?InlineKeyboardMarkup $keyboard = null,

@@ -9,6 +9,7 @@ test('it caches Telegram web app data until a refresh is requested', function ()
     config()->set('cache.default', 'array');
     config()->set('services.http.retry_attempts', 1);
     config()->set('services.access-token.base_uri', 'http://access-token:8000/');
+    config()->set('services.access-token.internal_secret', 'test-internal-secret');
     Cache::flush();
 
     Http::fake([
@@ -24,18 +25,52 @@ test('it caches Telegram web app data until a refresh is requested', function ()
         ->and($client->get('pixelworld', refresh: true))->toContain('auth_date=second-auth-date');
 
     Http::assertSentCount(2);
+    Http::assertSent(fn ($request) => $request->hasHeader('Authorization', 'Bearer test-internal-secret'));
 });
+
+test('it preserves extra signed fields and their exact encoding', function () {
+    config()->set('cache.default', 'array');
+    config()->set('services.http.retry_attempts', 1);
+    config()->set('services.access-token.base_uri', 'http://access-token:8000/');
+    config()->set('services.access-token.internal_secret', 'test-internal-secret');
+    Cache::flush();
+
+    $initData = telegramWebAppData('123').'&query_id=AAE%2Bunchanged&extra_signed=a%20b';
+    Http::fake(['http://access-token:8000/*' => Http::response(['decoded' => $initData])]);
+
+    $result = (new TelegramWebAppDataClient(new HttpRetryPolicy))->get('pixelworld');
+
+    expect($result)->toBe($initData);
+    Http::assertSent(fn ($request) => $request->url() === 'http://access-token:8000/main_web_view?bot_username=pixelworld'
+        && $request->hasHeader('Authorization', 'Bearer test-internal-secret'));
+});
+
+test('it rejects malformed sidecar payloads', function (array $payload) {
+    config()->set('cache.default', 'array');
+    config()->set('services.http.retry_attempts', 1);
+    config()->set('services.access-token.base_uri', 'http://access-token:8000/');
+    config()->set('services.access-token.internal_secret', 'test-internal-secret');
+    Cache::flush();
+    Http::fake(['http://access-token:8000/*' => Http::response($payload)]);
+
+    expect(fn () => (new TelegramWebAppDataClient(new HttpRetryPolicy))->get('pixelworld'))
+        ->toThrow(RuntimeException::class, 'Invalid response');
+})->with([
+    'missing decoded value' => [[]],
+    'non-string decoded value' => [['decoded' => ['auth_date' => '123']]],
+    'missing mandatory field' => [['decoded' => 'user=%7B%22id%22%3A1%7D&auth_date=123&hash=hash']],
+    'duplicate mandatory field' => [['decoded' => telegramWebAppData('123').'&hash=other']],
+]);
 
 function telegramWebAppDataResponse(string $authDate): array
 {
     return [
-        'flat' => [
-            'user' => '{"id":1}',
-            'chat_instance' => 'chat-instance',
-            'chat_type' => 'private',
-            'auth_date' => $authDate,
-            'signature' => 'signature',
-            'hash' => 'hash',
-        ],
+        'decoded' => telegramWebAppData($authDate),
     ];
+}
+
+function telegramWebAppData(string $authDate): string
+{
+    return 'user=%7B%22id%22%3A1%7D&chat_instance=chat-instance&chat_type=private'
+        ."&auth_date={$authDate}&signature=signature&hash=hash";
 }

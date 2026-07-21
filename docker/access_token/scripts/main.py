@@ -1,196 +1,231 @@
-import json
-import urllib.parse
+"""Authenticated API for obtaining Pixel World Telegram Mini App init data."""
+
+import asyncio
+import hmac
 import logging
+import time
+import urllib.parse
+from collections import deque
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Final
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
-from telethon import TelegramClient
-from telethon.tl.functions.messages import RequestWebViewRequest, RequestMainWebViewRequest
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
+from telethon import TelegramClient, errors
+from telethon.tl.functions.messages import RequestMainWebViewRequest
 from telethon.tl.types import InputUser
 
 from config import settings
 
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("telethon").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
-client = TelegramClient(
-    settings.telegram_session_name,
-    settings.telegram_api_id,
-    settings.telegram_api_hash
+MANDATORY_INIT_DATA_FIELDS: Final[frozenset[str]] = frozenset(
+    {"user", "chat_instance", "chat_type", "auth_date", "signature", "hash"}
 )
 
+client: TelegramClient | None = None
 
-async def get_web_view_data(
-    bot_username: str,
-    mini_app_url: str,
-    chat_username: str | None = None,
-    start_param: str | None = None
-) -> dict | None:
-    try:
-        bot = await client.get_entity(bot_username)
-        user_input = InputUser(user_id=bot.id, access_hash=bot.access_hash)
 
-        if chat_username:
-            peer = await client.get_input_entity(chat_username)
-        else:
-            peer = await client.get_input_entity(bot_username)
+class InvalidInitDataError(ValueError):
+    """Raised when Telegram returns malformed or incomplete init data."""
 
-        kwargs = {
-            "peer": peer,
-            "bot": user_input,
-            "url": mini_app_url,
-            "platform": "android",
-            "from_bot_menu": False
-        }
 
-        if start_param:
-            kwargs["start_param"] = start_param
+class TelegramSessionUnavailableError(RuntimeError):
+    """Raised when the persisted Telegram session is not connected."""
 
-        result = await client(RequestWebViewRequest(**kwargs))
 
-        logger.info(f"Full URL: {result.url}")
+class RequestRateLimiter:
+    """An in-process fixed-window limiter protecting the Telegram account."""
 
-        if "#tgWebAppData=" not in result.url:
-            logger.error("No tgWebAppData in response")
+    def __init__(self, requests_per_minute: int) -> None:
+        self._limit = requests_per_minute
+        self._requests: deque[float] = deque()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> int | None:
+        """Record a request or return the number of seconds before retrying."""
+        async with self._lock:
+            now = time.monotonic()
+            while self._requests and now - self._requests[0] >= 60:
+                self._requests.popleft()
+
+            if len(self._requests) >= self._limit:
+                return max(1, int(61 - (now - self._requests[0])))
+
+            self._requests.append(now)
             return None
 
-        raw_data = result.url.split("#tgWebAppData=")[1]
-        decoded = urllib.parse.unquote(raw_data)
 
-        logger.info(f"Decoded data: {decoded}")
-
-        return {
-            "raw": raw_data,
-            "decoded": decoded,
-            "parsed": parse_params(decoded),
-            "flat": parse_params_flat(decoded)
-        }
-
-    except Exception as e:
-        logger.error(f"Error: {e}", exc_info=True)
-        return None
+request_limiter = RequestRateLimiter(settings.requests_per_minute)
+telegram_slots = asyncio.Semaphore(settings.max_concurrent_requests)
 
 
-async def get_main_web_view_data(
-    bot_username: str,
-    chat_username: str | None = None,
-    start_param: str | None = None
-) -> dict | None:
+def _extract_init_data(url: str) -> str:
+    """Extract and validate the exact decoded Telegram init-data query string."""
+    fragment = urllib.parse.urlsplit(url).fragment
+    encoded = next(
+        (
+            part.removeprefix("tgWebAppData=")
+            for part in fragment.split("&")
+            if part.startswith("tgWebAppData=")
+        ),
+        None,
+    )
+    if not encoded:
+        raise InvalidInitDataError("Telegram response did not contain init data.")
+
+    decoded = urllib.parse.unquote(encoded)
     try:
-        bot = await client.get_entity(bot_username)
-        user_input = InputUser(user_id=bot.id, access_hash=bot.access_hash)
+        pairs = urllib.parse.parse_qsl(
+            decoded,
+            keep_blank_values=True,
+            strict_parsing=True,
+        )
+    except ValueError as exception:
+        raise InvalidInitDataError("Telegram init data is malformed.") from exception
 
-        if chat_username:
-            peer = await client.get_input_entity(chat_username)
-        else:
-            peer = await client.get_input_entity(bot_username)
+    values: dict[str, list[str]] = {}
+    for key, value in pairs:
+        values.setdefault(key, []).append(value)
 
-        kwargs = {
-            "peer": peer,
-            "bot": user_input,
-            "platform": "android"
-        }
+    if any(
+        len(values.get(field, [])) != 1 or not values[field][0]
+        for field in MANDATORY_INIT_DATA_FIELDS
+    ):
+        raise InvalidInitDataError("Telegram init data is missing auth fields.")
 
-        if start_param:
-            kwargs["start_param"] = start_param
-
-        result = await client(RequestMainWebViewRequest(**kwargs))
-
-        logger.info(f"Full URL: {result.url}")
-
-        if "#tgWebAppData=" not in result.url:
-            logger.error("No tgWebAppData in response")
-            return None
-
-        raw_data = result.url.split("#tgWebAppData=")[1]
-        decoded = urllib.parse.unquote(raw_data)
-
-        logger.info(f"Decoded data: {decoded}")
-
-        return {
-            "raw": raw_data,
-            "decoded": decoded,
-            "parsed": parse_params(decoded),
-            "flat": parse_params_flat(decoded)
-        }
-
-    except Exception as e:
-        logger.error(f"Error: {e}", exc_info=True)
-        return None
+    return decoded
 
 
-def parse_params(params_str: str) -> dict:
-    result = {}
-
-    for param in params_str.split('&'):
-        if '=' not in param:
-            continue
-
-        key, value = param.split('=', 1)
-        value = urllib.parse.unquote(value)
-
-        if key == 'user':
-            result[key] = json.loads(value)
-        elif key == 'tgWebAppDefaultColors':
-            result[key] = json.loads(value)
-        else:
-            result[key] = value
-
-    return result
+async def _authorize(authorization: str | None = Header(default=None)) -> None:
+    """Authenticate an internal caller without leaking secret comparison timing."""
+    scheme, separator, supplied = (authorization or "").partition(" ")
+    expected = settings.internal_api_secret.get_secret_value()
+    valid = (
+        separator == " "
+        and scheme.lower() == "bearer"
+        and bool(supplied)
+        and hmac.compare_digest(supplied.encode(), expected.encode())
+    )
+    if not valid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
-def parse_params_flat(params_str: str) -> dict:
-    result = {}
+async def get_main_web_view_data(bot_username: str) -> str:
+    """Request Pixel World init data from Telegram and preserve it exactly."""
+    if client is None:
+        raise TelegramSessionUnavailableError("Telegram client is not connected.")
 
-    for param in params_str.split('&'):
-        if '=' not in param:
-            continue
-
-        key, value = param.split('=', 1)
-        value = urllib.parse.unquote(value)
-
-        result[key] = value
-
-    return result
+    bot = await client.get_entity(bot_username)
+    user_input = InputUser(user_id=bot.id, access_hash=bot.access_hash)
+    peer = await client.get_input_entity(bot_username)
+    result = await client(
+        RequestMainWebViewRequest(peer=peer, bot=user_input, platform="android")
+    )
+    return _extract_init_data(result.url)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    await client.start(phone=settings.telegram_phone, password=settings.telegram_password)
-    yield
-    await client.disconnect()
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    """Connect the persisted Telegram session for the process lifetime."""
+    global client
+    client = TelegramClient(
+        settings.telegram_session_name,
+        settings.telegram_api_id,
+        settings.telegram_api_hash,
+    )
+    await client.connect()
+    if not await client.is_user_authorized():
+        await client.disconnect()
+        client = None
+        raise RuntimeError(
+            "Telegram session is not authorized; run the offline authentication helper."
+        )
+    try:
+        yield
+    finally:
+        await client.disconnect()
+        client = None
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 
 
-@app.get("/web_view")
-async def web_view(
-    bot_username: str,
-    mini_app_url: str,
-    chat_username: str | None = None,
-    start_param: str | None = None
-):
-    data = await get_web_view_data(bot_username, mini_app_url, chat_username, start_param)
-    if not data:
-        raise HTTPException(status_code=400, detail="Failed to get token")
-
-    return JSONResponse(content=data)
-
-
-@app.get("/main_web_view")
+@app.get("/main_web_view", dependencies=[Depends(_authorize)])
 async def main_web_view(
-    bot_username: str,
-    chat_username: str | None = None,
-    start_param: str | None = None
-):
-    data = await get_main_web_view_data(bot_username, chat_username, start_param)
-    if not data:
-        raise HTTPException(status_code=400, detail="Failed to get token")
+    bot_username: str = Query(min_length=1, max_length=64),
+) -> dict[str, str]:
+    """Return exact init data for an explicitly allowed Pixel World bot."""
+    normalized_username = bot_username.removeprefix("@").lower()
+    if normalized_username not in settings.allowed_bot_username_set:
+        raise HTTPException(status_code=403, detail="Bot is not allowed.")
 
-    return JSONResponse(content=data)
+    retry_after = await request_limiter.acquire()
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail="Request rate exceeded.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    try:
+        await asyncio.wait_for(
+            telegram_slots.acquire(), timeout=settings.concurrency_wait_seconds
+        )
+    except TimeoutError as exception:
+        raise HTTPException(
+            status_code=429,
+            detail="Telegram request already in progress.",
+            headers={"Retry-After": "1"},
+        ) from exception
+
+    try:
+        decoded = await get_main_web_view_data(normalized_username)
+    except errors.FloodWaitError as exception:
+        raise HTTPException(
+            status_code=429,
+            detail="Telegram rate limit reached.",
+            headers={"Retry-After": str(max(1, exception.seconds))},
+        ) from exception
+    except (
+        TimeoutError,
+        ConnectionError,
+        OSError,
+        errors.ServerError,
+        TelegramSessionUnavailableError,
+    ) as exception:
+        logger.warning("Transient Telegram failure (%s).", type(exception).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Telegram is temporarily unavailable.",
+            headers={"Retry-After": str(settings.transient_retry_after_seconds)},
+        ) from exception
+    except (InvalidInitDataError, ValueError, TypeError) as exception:
+        logger.warning("Invalid Telegram response (%s).", type(exception).__name__)
+        raise HTTPException(
+            status_code=422, detail="Invalid Telegram data."
+        ) from exception
+    except errors.RPCError as exception:
+        logger.warning("Telegram RPC failure (%s).", type(exception).__name__)
+        raise HTTPException(
+            status_code=502, detail="Telegram request failed."
+        ) from exception
+    finally:
+        telegram_slots.release()
+
+    return {"decoded": decoded}
 
 
 if __name__ == "__main__":

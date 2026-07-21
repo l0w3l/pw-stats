@@ -42,11 +42,22 @@ class SpiritBoxRichMessageGateway implements TelegramRichMessageGateway
         $telegramBotApi = app(TelegramBotApi::class);
         $this->rateLimiter->reserve($messageOrigin->chat->id);
 
-        return $telegramBotApi->editMessageText(
+        $result = $telegramBotApi->editMessageText(
             messageId: $messageOrigin->messageId,
             chatId: $messageOrigin->chat->id,
             replyMarkup: $keyboard,
             richMessage: $message,
         );
+
+        // Telegram reports an idempotent edit as a 400 even though the desired
+        // message is already present. Normalize that harmless outcome to the
+        // interface's explicit successful no-op value.
+        if ($result instanceof FailResult
+            && $result->errorCode === 400
+            && str_contains(strtolower($result->description ?? ''), 'message is not modified')) {
+            return true;
+        }
+
+        return $result;
     }
 }

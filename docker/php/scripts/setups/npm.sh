@@ -1,14 +1,14 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-source $HOME/.bashrc
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+# shellcheck disable=SC1091
+source "$NVM_DIR/nvm.sh"
 
 cd /var/www/html
 
-if [ "$APP_ENV" = "production" ]; then
-    npm ci
-    npm run build
-else
-    npm install
+npm ci
+
+if [ "${1:-}" != "--install-only" ]; then
     npm run build
 fi

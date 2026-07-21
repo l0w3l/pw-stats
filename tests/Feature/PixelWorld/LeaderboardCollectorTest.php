@@ -12,7 +12,9 @@ use App\Services\PixelWorld\Leaderboard\LeaderboardCollector;
 use App\Services\PixelWorld\Leaderboard\LeaderboardPeriodWriter;
 use App\Services\PixelWorld\Stats\LeaderboardRange;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 
 uses(RefreshDatabase::class);
 
@@ -68,6 +70,70 @@ test('period writer deduplicates an authenticated viewer also present in leaderb
     expect(PixelWorldPlayer::query()->count())->toBe(1)
         ->and(PixelWorldPlayer::query()->sole()->nickname)->toBe('ranked-profile')
         ->and($period->entries()->sole()->player_uuid)->toBe('viewer');
+});
+
+test('period writer safely creates and then replaces the same period', function () {
+    $writer = new LeaderboardPeriodWriter;
+    $firstAt = CarbonImmutable::parse('2026-07-20 12:00:00', 'UTC');
+    $calendarPeriod = new CalendarPeriod($firstAt->startOfDay(), $firstAt->endOfDay());
+    $viewer = LeaderboardPlayerData::from(leaderboardCollectorPlayer('viewer', 100));
+
+    $first = $writer->replace(
+        LeaderboardRange::Day,
+        $calendarPeriod,
+        $viewer,
+        [LeaderboardPlayerData::from(leaderboardCollectorPlayer('player-1', 1))],
+        2,
+        $firstAt,
+    );
+    $secondAt = $firstAt->addMinute();
+    $second = $writer->replace(
+        LeaderboardRange::Day,
+        $calendarPeriod,
+        $viewer,
+        [
+            LeaderboardPlayerData::from(leaderboardCollectorPlayer('player-1', 1)),
+            LeaderboardPlayerData::from(leaderboardCollectorPlayer('player-2', 2)),
+        ],
+        2,
+        $secondAt,
+    );
+
+    expect($second->id)->toBe($first->id)
+        ->and(PixelWorldLeaderboardPeriod::query()->count())->toBe(1)
+        ->and($second->period_start->toDateString())->toBe('2026-07-20')
+        ->and($second->period_end->toDateString())->toBe('2026-07-20')
+        ->and($second->total)->toBe(2)
+        ->and($second->entries_count)->toBe(2)
+        ->and($second->missing_places)->toBe(0)
+        ->and($second->is_partial)->toBeFalse()
+        ->and($second->last_collected_at->equalTo($secondAt))->toBeTrue()
+        ->and($second->entries()->orderBy('place')->pluck('player_uuid')->all())
+        ->toBe(['player-1', 'player-2']);
+});
+
+test('a failed first period replacement does not leak its newly inserted row', function () {
+    $at = CarbonImmutable::parse('2026-07-20 12:00:00', 'UTC');
+    $playerOne = LeaderboardPlayerData::from(leaderboardCollectorPlayer('player-1', 1));
+    DB::statement(<<<'SQL'
+        CREATE TRIGGER reject_first_period_entry
+        BEFORE INSERT ON pixel_world_leaderboard_period_entries
+        BEGIN
+            SELECT RAISE(ABORT, 'forced first replacement failure');
+        END
+        SQL);
+
+    expect(fn () => (new LeaderboardPeriodWriter)->replace(
+        LeaderboardRange::Day,
+        new CalendarPeriod($at->startOfDay(), $at->endOfDay()),
+        LeaderboardPlayerData::from(leaderboardCollectorPlayer('viewer', 100)),
+        [$playerOne],
+        1,
+        $at,
+    ))->toThrow(QueryException::class);
+
+    expect(PixelWorldLeaderboardPeriod::query()->count())->toBe(0)
+        ->and(PixelWorldPlayer::query()->count())->toBe(0);
 });
 
 test('it tolerates total changes between pages', function () {

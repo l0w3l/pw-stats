@@ -1,4 +1,4 @@
-FROM php:8.3-fpm
+FROM php:8.3-fpm-bookworm
 
 WORKDIR /var/www/html
 
@@ -39,7 +39,7 @@ RUN apt-get update && apt-get install -y \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install Composer
-COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 # Copy scripts and config
 COPY ./scripts /usr/local/bin/scripts

@@ -36,7 +36,28 @@ class PixelWorldLeaderboardClient implements LeaderboardClient
 
         $response->throw();
 
-        return PlayersLeaderboardResponseData::from($response->json());
+        $leaderboard = PlayersLeaderboardResponseData::from($response->json());
+        $received = $leaderboard->data->leaderboard;
+        $players = $received->list->players;
+        $hasInvalidPlace = collect($players)->contains(
+            fn ($player): bool => $player->place < 1 || $player->place > $received->list->total,
+        );
+
+        if (! $leaderboard->ok
+            || $received->range !== $range->value
+            || $received->list->page !== $page
+            || $received->list->total < 0
+            || count($players) > $limit
+            || ($received->list->total === 0 && $players !== [])
+            || $hasInvalidPlace) {
+            throw new \RuntimeException(sprintf(
+                'Invalid %s leaderboard response for page %d.',
+                $range->value,
+                $page,
+            ));
+        }
+
+        return $leaderboard;
     }
 
     private function request(string $token, LeaderboardRange $range, int $page, int $limit): Response
@@ -47,6 +68,7 @@ class PixelWorldLeaderboardClient implements LeaderboardClient
             return Http::acceptJson()
                 ->connectTimeout((int) config('services.http.connect_timeout_seconds'))
                 ->timeout((int) config('services.http.timeout_seconds'))
+                ->withoutRedirecting()
                 ->withToken($token)
                 ->get(rtrim((string) config('services.pixel-world.base_uri'), '/').'/stat/leaderboard/players', [
                     'range' => $range->value,

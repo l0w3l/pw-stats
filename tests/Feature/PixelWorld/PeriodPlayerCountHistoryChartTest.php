@@ -69,6 +69,111 @@ test('chart service uses a deterministic period cache with a fake renderer', fun
     }
 });
 
+test('chart cache ignores collection freshness but invalidates rendered point changes', function () {
+    $firstPeriod = chartPeriod('day', '2026-07-19', 100);
+    $secondPeriod = chartPeriod('day', '2026-07-20', 105);
+    $directory = storage_path('framework/testing/analytics-chart-'.bin2hex(random_bytes(4)));
+    config()->set('analytics_chart.cache_path', $directory);
+    config()->set('analytics_chart.period_limits', ['day' => 30, 'week' => 12, 'month' => 12]);
+
+    $renderer = new class implements ChartRenderer
+    {
+        public int $renders = 0;
+
+        public function version(): string
+        {
+            return 'fake-v1';
+        }
+
+        public function render(PlayerCountChartData $data, int $width, int $height): string
+        {
+            return 'render-'.++$this->renders;
+        }
+    };
+
+    try {
+        $service = new PlayerCountChartService(new PeriodPlayerCountHistory, $renderer);
+        $initial = $service->generate();
+
+        PixelWorldLeaderboardPeriod::query()
+            ->whereKey([$firstPeriod->id, $secondPeriod->id])
+            ->update(['last_collected_at' => now()->addHour()]);
+
+        $collectedLater = $service->generate();
+
+        $secondPeriod->update(['total' => 106]);
+        $totalChanged = $service->generate();
+
+        $secondPeriod->update(['is_partial' => true]);
+        $partialChanged = $service->generate();
+
+        expect($initial)->not->toBeNull()
+            ->and($collectedLater)->not->toBeNull()
+            ->and($totalChanged)->not->toBeNull()
+            ->and($partialChanged)->not->toBeNull()
+            ->and($collectedLater->cacheKey)->toBe($initial->cacheKey)
+            ->and($collectedLater->path)->toBe($initial->path)
+            ->and($totalChanged->cacheKey)->not->toBe($initial->cacheKey)
+            ->and($partialChanged->cacheKey)->not->toBe($totalChanged->cacheKey)
+            ->and($renderer->renders)->toBe(3);
+    } finally {
+        File::deleteDirectory($directory);
+    }
+});
+
+test('chart cache invalidates rendering configuration changes', function () {
+    chartPeriod('day', '2026-07-19', 100);
+    chartPeriod('day', '2026-07-20', 105);
+    $directory = storage_path('framework/testing/analytics-chart-'.bin2hex(random_bytes(4)));
+    config()->set('analytics_chart.cache_path', $directory);
+    config()->set('analytics_chart.period_limits', ['day' => 30, 'week' => 12, 'month' => 12]);
+    config()->set('analytics_chart.width', 1200);
+    config()->set('analytics_chart.height', 675);
+    config()->set('analytics_chart.cache_version', 'cache-v1');
+
+    $renderer = new class implements ChartRenderer
+    {
+        public int $renders = 0;
+
+        public string $rendererVersion = 'renderer-v1';
+
+        public function version(): string
+        {
+            return $this->rendererVersion;
+        }
+
+        public function render(PlayerCountChartData $data, int $width, int $height): string
+        {
+            return 'render-'.++$this->renders;
+        }
+    };
+
+    try {
+        $service = new PlayerCountChartService(new PeriodPlayerCountHistory, $renderer);
+        $keys = [$service->generate()?->cacheKey];
+
+        config()->set('analytics_chart.width', 1300);
+        $keys[] = $service->generate()?->cacheKey;
+
+        config()->set('analytics_chart.height', 700);
+        $keys[] = $service->generate()?->cacheKey;
+
+        config()->set('analytics_chart.period_limits.day', 29);
+        $keys[] = $service->generate()?->cacheKey;
+
+        $renderer->rendererVersion = 'renderer-v2';
+        $keys[] = $service->generate()?->cacheKey;
+
+        config()->set('analytics_chart.cache_version', 'cache-v2');
+        $keys[] = $service->generate()?->cacheKey;
+
+        expect(array_unique($keys))->toHaveCount(6)
+            ->and($renderer->renders)->toBe(6);
+    } finally {
+        File::deleteDirectory($directory);
+    }
+});
+
 function chartPeriod(string $range, string $start, int $total, bool $partial = false): PixelWorldLeaderboardPeriod
 {
     $end = match ($range) {

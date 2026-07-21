@@ -8,6 +8,7 @@ use App\Services\PixelWorld\Stats\PlayerTotalCollector;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schedule;
 
 uses(RefreshDatabase::class);
 
@@ -86,6 +87,18 @@ test('player total command is scheduled every minute', function () {
     $this->artisan('schedule:list')
         ->expectsOutputToContain('pixel-world:player-totals:collect')
         ->assertSuccessful();
+});
+
+test('full leaderboard collection uses staggered range schedules', function () {
+    $expressions = collect(Schedule::events())
+        ->filter(fn ($event): bool => str_starts_with((string) $event->description, 'pixel-world:leaderboard:'))
+        ->mapWithKeys(fn ($event): array => [$event->description => $event->expression]);
+
+    expect($expressions->all())->toBe([
+        'pixel-world:leaderboard:day' => '*/30 * * * *',
+        'pixel-world:leaderboard:week' => '17 * * * *',
+        'pixel-world:leaderboard:month' => '37 */2 * * *',
+    ]);
 });
 
 function playerTotalResponse(int $total): PlayersLeaderboardResponseData

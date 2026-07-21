@@ -1,0 +1,4 @@
+.env
+postgres/data/
+fpm/storage/
+nginx/storage/logs/

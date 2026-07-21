@@ -1,0 +1,10 @@
+access-token-server/.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.idea
+.env
+*.session
+*.session-journal

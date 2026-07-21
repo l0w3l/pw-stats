@@ -1,0 +1,128 @@
+#!/bin/bash
+set -e
+
+export HOST_UID=$(id -u)
+export HOST_GID=$(id -g)
+
+# Change to the script's directory
+cd "$(dirname "$0")"
+
+# Load .env
+if [ -f .env ]; then
+    set -a
+    source <(grep -v '^#' .env | sed '/^$/d')
+    set +a
+else
+    echo ".env not found"
+    exit 1
+fi
+
+# Determine environment (dev by default)
+ENV="dev"
+if [[ "$1" == "prod" ]]; then
+    ENV="prod"
+    shift
+elif [[ "$1" == "dev" ]]; then
+    ENV="dev"
+    shift
+fi
+
+COMPOSE_FILES="-f docker-compose.yml"
+if [ -f "docker-compose.$ENV.yml" ]; then
+    COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.$ENV.yml"
+fi
+ENV_FILES="--env-file .env"
+
+# Add application .env if it exists
+APP_ENV_FILE="${STORAGE_APP}/.env"
+PROJECT_NAME="monya52" # Default fallback
+
+if [ -f "$APP_ENV_FILE" ]; then
+    ENV_FILES="$ENV_FILES --env-file $APP_ENV_FILE"
+    # Extract APP_NAME and sanitize it for docker project name
+    EXTRACTED_NAME=$(grep '^APP_NAME=' "$APP_ENV_FILE" | cut -d '=' -f2- | tr -d '"' | tr -d "'" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')
+    if [ -n "$EXTRACTED_NAME" ]; then
+        PROJECT_NAME="$EXTRACTED_NAME"
+    fi
+fi
+
+COMPOSE_BASE="docker compose -p $PROJECT_NAME $ENV_FILES $COMPOSE_FILES"
+
+# Helper for initializing storage and logs
+init_storage() {
+    echo "Initializing storage and logs for $ENV (Project: $PROJECT_NAME)..."
+
+    DIRS=("$STORAGE_NGINX" "$STORAGE_FPM")
+    for dir in "${DIRS[@]}"; do
+        mkdir -p "$dir"
+    done
+
+    LOG_FILES=(
+        "$STORAGE_FPM/logs/fpm-php.www.log"
+        "$STORAGE_NGINX/logs/access.log"
+        "$STORAGE_NGINX/logs/error.log"
+    )
+
+    for file in "${LOG_FILES[@]}"; do
+        mkdir -p "$(dirname "$file")"
+        touch "$file"
+        chmod 664 "$file"
+    done
+}
+
+case "$1" in
+    up|start)
+        init_storage
+        shift
+        $COMPOSE_BASE up -d "$@"
+        ;;
+    down|stop)
+        shift
+        $COMPOSE_BASE down "$@"
+        ;;
+    restart)
+        shift
+        $COMPOSE_BASE restart "$@"
+        ;;
+    build)
+        shift
+        $COMPOSE_BASE build "$@"
+        ;;
+    logs)
+        shift
+        $COMPOSE_BASE logs "$@"
+        ;;
+    exec)
+        shift
+        $COMPOSE_BASE exec -it -u root "$@"
+        ;;
+    artisan)
+        shift
+        $COMPOSE_BASE exec -it -u root fpm php artisan "$@"
+        ;;
+    composer)
+        shift
+        $COMPOSE_BASE exec -it -u root app fpm composer "$@"
+        ;;
+    tinker)
+        $COMPOSE_BASE exec -it -u root fpm php artisan tinker
+        ;;
+    test)
+        shift
+        $COMPOSE_BASE exec -it -u root fpm php artisan test "$@"
+        ;;
+    npm)
+        shift
+        $COMPOSE_BASE exec -it -u root vite npm "$@"
+        ;;
+    status)
+        $COMPOSE_BASE ps
+        ;;
+    *)
+        if [ -z "$1" ]; then
+            echo "Usage: ./dc [dev|prod] [up|down|restart|build|logs|exec|artisan|composer|tinker|test|npm|status]"
+            exit 1
+        fi
+        $COMPOSE_BASE "$@"
+        ;;
+esac

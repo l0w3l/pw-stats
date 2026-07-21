@@ -1,0 +1,122 @@
+services:
+    nginx:
+        build: ./nginx
+        ports:
+            - "${NGINX_HTTP:-80}:80"
+        networks:
+            - backend
+        restart: unless-stopped
+        volumes:
+            - "${STORAGE_APP}:/var/www/html"
+            - "${STORAGE_NGINX}/logs/:/var/log/nginx/"
+            - ./nginx/config/nginx.conf:/etc/nginx/nginx.conf:ro
+            - ./nginx/config/sites-available/:/etc/nginx/sites-available/
+            - ./nginx/config/sites-enabled/:/etc/nginx/sites-enabled/
+            - ./nginx/config/nginxconfig.io/:/etc/nginx/nginxconfig.io/
+
+    fpm:
+        build:
+            context: ./php
+        user: "${HOST_UID}:${HOST_GID}"
+        networks:
+            - backend
+        volumes:
+            - "${STORAGE_APP}:/var/www/html"
+        restart: unless-stopped
+
+    postgres:
+        image: postgres:18
+        restart: unless-stopped
+        user: "${HOST_UID}:${HOST_GID}"
+
+        environment:
+            POSTGRES_USER: "${POSTGRES_USER}"
+            POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+            POSTGRES_DB: "${POSTGRES_DB}"
+
+        networks:
+            - backend
+
+        volumes:
+            - "${STORAGE_POSTGRES}:/var/lib/postgresql"
+            - ./postgres/postgresql.conf:/etc/postgresql/postgresql.conf
+
+        command: >
+            postgres
+            -c config_file=/etc/postgresql/postgresql.conf
+
+    setup:
+        build:
+            context: ./php
+        user: "${HOST_UID}:${HOST_GID}"
+        networks:
+            - backend
+        restart: "no"
+        entrypoint: ["bash", "/usr/local/bin/scripts/setup.sh"]
+        volumes:
+            - "${STORAGE_APP}:/var/www/html"
+
+    scheduler:
+        build:
+            context: ./php
+        user: "${HOST_UID}:${HOST_GID}"
+        networks:
+            - backend
+        restart: always
+        entrypoint: [ "bash", "/usr/local/bin/scripts/laravel_scheduler.sh" ]
+        volumes:
+            - "${STORAGE_APP}:/var/www/html"
+
+    queue:
+        build:
+            context: ./php
+        user: "${HOST_UID}:${HOST_GID}"
+        logging:
+            options:
+                max-size: "10m"
+                max-file: "3"
+        networks:
+            - backend
+        restart: always
+        entrypoint: [ "bash", "/usr/local/bin/scripts/laravel_queue.sh" ]
+        volumes:
+            - "${STORAGE_APP}:/var/www/html"
+
+
+    flaresolverr:
+        # DockerHub mirror flaresolverr/flaresolverr:latest
+        image: ghcr.io/flaresolverr/flaresolverr:latest
+        environment:
+            - LOG_LEVEL=${LOG_LEVEL:-info}
+            - LOG_FILE=${LOG_FILE:-none}
+            - LOG_HTML=${LOG_HTML:-false}
+            - CAPTCHA_SOLVER=${CAPTCHA_SOLVER:-none}
+            - TZ=Europe/London
+        volumes:
+            - /var/lib/flaresolver:/config
+        networks:
+            - backend
+        restart: unless-stopped
+
+    access-token:
+        env_file:
+            - .env
+        build: ./access_token
+        restart: unless-stopped
+        networks:
+            - backend
+        volumes:
+            - telegram_session:/app/session_data
+    redis:
+        image: redis:7-alpine
+        restart: unless-stopped
+        networks:
+            - backend
+
+
+networks:
+    backend:
+        driver: bridge
+
+volumes:
+    telegram_session:

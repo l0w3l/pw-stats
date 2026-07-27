@@ -29,7 +29,7 @@ class PixelWorldLeaderboardClient implements LeaderboardClient
         $token = $this->tokenProvider->token();
         $response = $this->request($token, $range, $page, $limit);
 
-        if (in_array($response->status(), [401, 403], true)) {
+        if ($response->status() === 403) {
             $token = $this->tokenProvider->refresh($token);
             $response = $this->request($token, $range, $page, $limit);
         }

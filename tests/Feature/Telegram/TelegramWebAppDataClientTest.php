@@ -9,7 +9,6 @@ test('it caches Telegram web app data until a refresh is requested', function ()
     config()->set('cache.default', 'array');
     config()->set('services.http.retry_attempts', 1);
     config()->set('services.access-token.base_uri', 'http://access-token:8000/');
-    config()->set('services.access-token.internal_secret', 'test-internal-secret');
     Cache::flush();
 
     Http::fake([
@@ -20,19 +19,22 @@ test('it caches Telegram web app data until a refresh is requested', function ()
 
     $client = new TelegramWebAppDataClient(new HttpRetryPolicy);
 
+    expect($client->get('pixelworld'))->toContain('auth_date=first-auth-date');
+
+    $this->travel(10)->years();
+
     expect($client->get('pixelworld'))->toContain('auth_date=first-auth-date')
-        ->and($client->get('pixelworld'))->toContain('auth_date=first-auth-date')
-        ->and($client->get('pixelworld', refresh: true))->toContain('auth_date=second-auth-date');
+        ->and($client->get('pixelworld', refresh: true))->toContain('auth_date=second-auth-date')
+        ->and($client->get('pixelworld'))->toContain('auth_date=second-auth-date');
 
     Http::assertSentCount(2);
-    Http::assertSent(fn ($request) => $request->hasHeader('Authorization', 'Bearer test-internal-secret'));
+    Http::assertNotSent(fn ($request) => $request->hasHeader('Authorization'));
 });
 
 test('it preserves extra signed fields and their exact encoding', function () {
     config()->set('cache.default', 'array');
     config()->set('services.http.retry_attempts', 1);
     config()->set('services.access-token.base_uri', 'http://access-token:8000/');
-    config()->set('services.access-token.internal_secret', 'test-internal-secret');
     Cache::flush();
 
     $initData = telegramWebAppData('123').'&query_id=AAE%2Bunchanged&extra_signed=a%20b';
@@ -42,14 +44,13 @@ test('it preserves extra signed fields and their exact encoding', function () {
 
     expect($result)->toBe($initData);
     Http::assertSent(fn ($request) => $request->url() === 'http://access-token:8000/main_web_view?bot_username=pixelworld'
-        && $request->hasHeader('Authorization', 'Bearer test-internal-secret'));
+        && ! $request->hasHeader('Authorization'));
 });
 
 test('it rejects malformed sidecar payloads', function (array $payload) {
     config()->set('cache.default', 'array');
     config()->set('services.http.retry_attempts', 1);
     config()->set('services.access-token.base_uri', 'http://access-token:8000/');
-    config()->set('services.access-token.internal_secret', 'test-internal-secret');
     Cache::flush();
     Http::fake(['http://access-token:8000/*' => Http::response($payload)]);
 

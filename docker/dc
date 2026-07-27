@@ -53,7 +53,7 @@ done
 
 APP_ENV_FILE="$STORAGE_APP/.env"
 if [[ ! -f $APP_ENV_FILE ]]; then
-    printf 'Missing application environment file %s. Copy .env.example there and set APP_KEY and ACCESS_TOKEN_INTERNAL_SECRET.\n' "$APP_ENV_FILE" >&2
+    printf 'Missing application environment file %s. Copy .env.example there and set APP_KEY.\n' "$APP_ENV_FILE" >&2
     exit 1
 fi
 

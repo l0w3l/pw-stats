@@ -9,7 +9,7 @@ Validated on 2026-07-21.
 | Composer | `validate --strict` passed; no security advisories |
 | Frontend | Vite production build passed; npm audit found no vulnerabilities |
 | SQLite | Full `migrate:fresh` passed through migration `000009` |
-| Sidecar | 26 isolated pytest cases passed; Ruff passed |
+| Access-token service | Image build and controlled configuration/application imports passed |
 | Docker | Development and production Compose rendering passed; shell syntax checks passed |
 | PostgreSQL | Notification `SKIP LOCKED` claim test and concurrent first-period writer test passed against PostgreSQL 18 |
 | Redis | Shared lock and cross-instance cooldown test passed against Redis 7 |
@@ -17,7 +17,8 @@ Validated on 2026-07-21.
 ## Report traceability
 
 - Credential logs: removed and covered by sidecar log-redaction tests.
-- Generic sidecar access: internal Bearer authentication, explicit allowlist, one operation, network isolation, concurrency/rate bounds.
+- Access-token service access: private network isolation, explicit bot allowlist, one exposed operation, and concurrency/rate bounds.
+- Pixel World authentication cache: permanent Cache-facade storage with a single TMA/Bearer refresh and request retry only after `403`.
 - Telegram init-data mutation: exact payload preservation tests cover ordering, duplicates, reserved and extra signed fields.
 - Group settings authorization: private/admin/member/channel/topic and inbound-throttle tests.
 - Guzzle advisories and redirects: Guzzle 7.15.1, redirects disabled, Composer audit clean.

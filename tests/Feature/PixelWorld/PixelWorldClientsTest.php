@@ -9,6 +9,7 @@ use App\Services\Telegram\TelegramWebAppDataProvider;
 use GuzzleHttp\Promise\PromiseInterface;
 use GuzzleHttp\Psr7\Response as Psr7Response;
 use Illuminate\Http\Client\Request;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -37,6 +38,8 @@ test('it exchanges web app data for a cached bearer token', function () {
         ->and($provider->token())->toBe('bearer-token')
         ->and($webAppData->refreshes)->toBe([false]);
 
+    $this->travel(2)->years();
+
     $nextProcessWebAppData = new FakeTelegramWebAppDataProvider;
     $nextProcessProvider = new PixelWorldTokenProvider($nextProcessWebAppData, new HttpRetryPolicy);
 
@@ -46,20 +49,22 @@ test('it exchanges web app data for a cached bearer token', function () {
     Http::assertSentCount(1);
 });
 
-test('it keeps the bearer token in process memory between API requests', function () {
+test('it does not serve a bearer token from memory after the cache is forgotten', function () {
     $webAppData = new FakeTelegramWebAppDataProvider;
     Http::fake([
-        'pw.game/*' => Http::response(['ok' => true, 'data' => ['access_token' => 'memory-token']]),
+        'pw.game/*' => Http::sequence()
+            ->push(['ok' => true, 'data' => ['access_token' => 'first-token']])
+            ->push(['ok' => true, 'data' => ['access_token' => 'second-token']]),
     ]);
     $provider = new PixelWorldTokenProvider($webAppData, new HttpRetryPolicy);
 
-    expect($provider->token())->toBe('memory-token');
+    expect($provider->token())->toBe('first-token');
     Cache::forget('pixel-world:access-token');
 
-    expect($provider->token())->toBe('memory-token')
-        ->and($webAppData->refreshes)->toBe([false]);
+    expect($provider->token())->toBe('second-token')
+        ->and($webAppData->refreshes)->toBe([false, false]);
 
-    Http::assertSentCount(1);
+    Http::assertSentCount(2);
 });
 
 test('it requests web app data for the configured bot username', function () {
@@ -72,12 +77,12 @@ test('it requests web app data for the configured bot username', function () {
     expect((new PixelWorldTokenProvider($webAppData, new HttpRetryPolicy))->token())->toBe('bot-token');
 });
 
-test('it refreshes rejected web app data during login', function () {
+test('it explicitly refreshes rejected web app data and retries login once after a 403', function () {
     $webAppData = new FakeTelegramWebAppDataProvider;
 
     Http::fake([
         'pw.game/*' => Http::sequence()
-            ->push([], 401)
+            ->push([], 403)
             ->push(['ok' => true, 'data' => ['access_token' => 'bearer-token']]),
     ]);
 
@@ -85,6 +90,38 @@ test('it refreshes rejected web app data during login', function () {
 
     expect($provider->token())->toBe('bearer-token')
         ->and($webAppData->refreshes)->toBe([false, true]);
+
+    Http::assertSentCount(2);
+});
+
+test('it does not refresh web app data or retry login after a 400 or 401', function (int $status) {
+    $webAppData = new FakeTelegramWebAppDataProvider;
+    Http::fake([
+        'pw.game/*' => Http::response([], $status),
+    ]);
+
+    $provider = new PixelWorldTokenProvider($webAppData, new HttpRetryPolicy);
+
+    expect(fn () => $provider->token())->toThrow(RequestException::class)
+        ->and($webAppData->refreshes)->toBe([false]);
+
+    Http::assertSentCount(1);
+})->with([400, 401]);
+
+test('it retries login at most once after repeated 403 responses', function () {
+    $webAppData = new FakeTelegramWebAppDataProvider;
+    Http::fake([
+        'pw.game/*' => Http::sequence()
+            ->push([], 403)
+            ->push([], 403),
+    ]);
+
+    $provider = new PixelWorldTokenProvider($webAppData, new HttpRetryPolicy);
+
+    expect(fn () => $provider->token())->toThrow(RequestException::class)
+        ->and($webAppData->refreshes)->toBe([false, true]);
+
+    Http::assertSentCount(2);
 });
 
 test('the login request does not follow redirects with web app credentials', function () {
@@ -141,7 +178,7 @@ test('the leaderboard client retries rate limited responses', function () {
     Http::assertSentCount(3);
 });
 
-test('the leaderboard client refreshes a rejected bearer without reopening Telegram', function () {
+test('the leaderboard client refreshes TMA data and retries once after a 403', function () {
     $webAppData = new FakeTelegramWebAppDataProvider;
     $loginRequests = 0;
     $leaderboardRequests = 0;
@@ -159,7 +196,7 @@ test('the leaderboard client refreshes a rejected bearer without reopening Teleg
         $leaderboardRequests++;
 
         return $leaderboardRequests === 1
-            ? Http::response([], 401)
+            ? Http::response([], 403)
             : Http::response(pixelWorldLeaderboardResponse());
     });
 
@@ -170,11 +207,63 @@ test('the leaderboard client refreshes a rejected bearer without reopening Teleg
 
     expect($leaderboard->data->leaderboard->list->players[0])->toBeInstanceOf(LeaderboardPlayerData::class)
         ->and($loginRequests)->toBe(2)
-        ->and($webAppData->refreshes)->toBe([false, false]);
+        ->and($leaderboardRequests)->toBe(2)
+        ->and($webAppData->refreshes)->toBe([false, true]);
 
     Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/stat/leaderboard/players')
         && $request->hasHeader('Authorization', 'Bearer fresh-token'));
 });
+
+test('the leaderboard client retries at most once after repeated 403 responses', function () {
+    Cache::forever('pixel-world:access-token', 'rejected-token');
+    $webAppData = new FakeTelegramWebAppDataProvider;
+    $leaderboardRequests = 0;
+
+    Http::fake(function (Request $request) use (&$leaderboardRequests) {
+        if (str_contains($request->url(), '/auth/login/telegram-mini-apps')) {
+            return Http::response([
+                'ok' => true,
+                'data' => ['access_token' => 'fresh-token'],
+            ]);
+        }
+
+        $leaderboardRequests++;
+
+        return Http::response([], 403);
+    });
+
+    $retryPolicy = new HttpRetryPolicy;
+    $client = new PixelWorldLeaderboardClient(
+        new PixelWorldTokenProvider($webAppData, $retryPolicy),
+        $retryPolicy,
+    );
+
+    expect(fn () => $client->page(LeaderboardRange::Month, 2, 20))->toThrow(RequestException::class)
+        ->and($leaderboardRequests)->toBe(2)
+        ->and($webAppData->refreshes)->toBe([true]);
+
+    Http::assertSentCount(3);
+});
+
+test('the leaderboard client does not refresh or retry after a 400 or 401', function (int $status) {
+    Cache::forever('pixel-world:access-token', 'current-token');
+    $webAppData = new FakeTelegramWebAppDataProvider;
+    Http::fake([
+        'pw.game/*' => Http::response([], $status),
+    ]);
+
+    $retryPolicy = new HttpRetryPolicy;
+    $client = new PixelWorldLeaderboardClient(
+        new PixelWorldTokenProvider($webAppData, $retryPolicy),
+        $retryPolicy,
+    );
+
+    expect(fn () => $client->page(LeaderboardRange::Month, 2, 20))->toThrow(RequestException::class)
+        ->and(Cache::get('pixel-world:access-token'))->toBe('current-token')
+        ->and($webAppData->refreshes)->toBe([]);
+
+    Http::assertSentCount(1);
+})->with([400, 401]);
 
 test('the leaderboard client rejects semantically mismatched responses', function () {
     Http::fake([

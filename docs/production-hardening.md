@@ -1,12 +1,13 @@
 # Production hardening
 
-## Required secrets
+## Required configuration
 
-- Generate `ACCESS_TOKEN_INTERNAL_SECRET` with at least 32 random characters and set the same value in the application `.env` and `docker/.env`.
 - Set `PIXEL_WORLD_BOT_USERNAME` to the mini-app bot and keep it in `PIXEL_WORLD_BOT_USERNAME_ALLOWLIST` for the sidecar.
 - Store bearer tokens, notification locks, and inbound throttles in Redis in multi-process production.
 
-The access-token sidecar exposes only the allowlisted main WebView operation on an internal network. It returns the exact once-decoded Telegram init-data string, requires an internal Bearer credential, runs as a non-root user, and does not log credential-bearing URLs or payloads.
+The access-token sidecar exposes only the allowlisted main WebView operation. It has no published host port and is reachable from application containers only through the private `sidecar_private` network, which is the caller-access boundary. It returns the exact once-decoded Telegram init-data string, runs as a non-root user, and does not log credential-bearing URLs or payloads. Laravel separately exchanges that init data for the Pixel World Bearer token.
+
+Laravel stores both the Telegram Mini App init data and the resulting Pixel World Bearer token permanently through the Cache facade. A Pixel World `403` response is the only automatic invalidation signal: Laravel refreshes the init data, obtains and caches a new Bearer token, and retries the rejected request once. `400` and `401` responses do not invalidate either value.
 
 ## Docker runtime
 

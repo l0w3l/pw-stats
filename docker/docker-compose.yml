@@ -14,7 +14,6 @@ x-app-environment: &app-environment
     REDIS_HOST: redis
     REDIS_PORT: "6379"
     ACCESS_TOKEN_BASE_URI: http://access-token:8000/
-    ACCESS_TOKEN_INTERNAL_SECRET: "${ACCESS_TOKEN_INTERNAL_SECRET:?Set ACCESS_TOKEN_INTERNAL_SECRET in the application .env}"
 
 x-app-depends: &app-depends
     setup:
@@ -179,7 +178,6 @@ services:
             TELEGRAM_PHONE: "${TELEGRAM_PHONE:-}"
             TELEGRAM_PASSWORD: "${TELEGRAM_PASSWORD:-}"
             TELEGRAM_SESSION_NAME: session_data/session_name
-            ACCESS_TOKEN_INTERNAL_SECRET: "${ACCESS_TOKEN_INTERNAL_SECRET}"
             PIXEL_WORLD_BOT_USERNAME_ALLOWLIST: "${PIXEL_WORLD_BOT_USERNAME_ALLOWLIST:?PIXEL_WORLD_BOT_USERNAME_ALLOWLIST is required}"
         networks:
             - sidecar_private

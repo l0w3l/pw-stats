@@ -1,0 +1,32 @@
+<?php
+
+declare(strict_types=1);
+
+return [
+    'headings' => [
+        'settings' => 'Pixel World · Настройки',
+        'digest' => 'Pixel World · Статистика',
+    ],
+    'periods' => [
+        'day' => 'День',
+        'week' => 'Неделя',
+        'month' => 'Месяц',
+    ],
+    'table' => [
+        'period' => 'Период',
+        'players' => 'Игроки',
+        'delta' => 'Δ',
+    ],
+    'controls' => [
+        'enable' => '🔔 Включить',
+        'disable' => '🔕 Выключить',
+        'refresh' => '🔄 Обновить',
+    ],
+    'empty' => 'Нет данных.',
+    'chart' => [
+        'caption' => 'История числа игроков.',
+        'title' => 'История числа игроков по календарным периодам',
+        'no_data' => 'Нет данных',
+        'partial_periods' => 'Частичные периоды',
+    ],
+];

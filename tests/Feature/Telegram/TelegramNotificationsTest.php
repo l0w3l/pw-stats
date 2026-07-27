@@ -3,13 +3,23 @@
 use App\Contracts\Telegram\Sleeper;
 use App\Contracts\Telegram\TelegramChatMemberGateway;
 use App\Contracts\Telegram\TelegramRichMessageGateway;
+use App\Data\PixelWorld\Analytics\AnalyticsDigestData;
 use App\Data\PixelWorld\Analytics\LeaderboardAnalyticsData;
+use App\Data\PixelWorld\Analytics\PlayerCountChartData;
 use App\Data\PixelWorld\Analytics\PlayerCountTrendData;
 use App\Data\Telegram\TelegramContext;
 use App\Jobs\SendTelegramNotificationBatch;
+use App\Models\PixelWorldLeaderboardPeriod;
+use App\Models\PixelWorldPlayerTotal;
 use App\Models\TelegramNotification;
 use App\Models\TelegramNotificationDelivery;
+use App\Queries\CurrentPlayerCountAnalytics;
 use App\Queries\LeaderboardAnalytics;
+use App\Queries\PeriodPlayerCountTrends;
+use App\Services\PixelWorld\Auth\PixelWorldTokenProvider;
+use App\Services\PixelWorld\Charts\PlayerCountChartService;
+use App\Services\PixelWorld\Leaderboard\LeaderboardClient;
+use App\Services\PixelWorld\Stats\PlayerTotalCollector;
 use App\Services\Telegram\TelegramContextResolver;
 use App\Services\Telegram\TelegramInboundRateLimiter;
 use App\Services\Telegram\TelegramNotificationDispatcher;
@@ -20,14 +30,18 @@ use App\Services\Telegram\TelegramSettings;
 use App\Services\Telegram\TelegramSettingsAuthorization;
 use App\Telegram\Handlers\NotificationSwitchCommandHandler;
 use App\Telegram\Handlers\NotificationToggleCallbackHandler;
+use App\Telegram\Messages\AnalyticsChartMediaFactory;
 use App\Telegram\Messages\AnalyticsDigestBuilder;
+use App\Telegram\Messages\AnalyticsRichMessageFactory;
 use App\Telegram\Messages\SettingsRichMessageFactory;
 use Carbon\CarbonImmutable;
 use Illuminate\Cache\CacheManager;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
 use Phptg\BotApi\FailResult;
@@ -56,10 +70,20 @@ function telegramMessage(int $chatId = 1): Message
     return new Message(1, new DateTimeImmutable('@0'), new Chat($chatId, 'private'));
 }
 
+function telegramDigestData(): AnalyticsDigestData
+{
+    return new AnalyticsDigestData(
+        new LeaderboardAnalyticsData([new PlayerCountTrendData('day', 100, 90, 10)], [], []),
+        new PlayerCountChartData([], []),
+    );
+}
+
 function telegramSettings(
     ?ChatMember $member,
     int $analyticsCalls = 0,
     ?TelegramRichMessageGateway $gateway = null,
+    ?CurrentPlayerCountAnalytics $analytics = null,
+    ?PlayerCountChartService $charts = null,
 ): TelegramSettings {
     $memberGateway = Mockery::mock(TelegramChatMemberGateway::class);
     if ($member === null) {
@@ -68,10 +92,19 @@ function telegramSettings(
         $memberGateway->shouldReceive('get')->andReturn($member);
     }
 
-    $analytics = Mockery::mock(LeaderboardAnalytics::class);
-    $analytics->shouldReceive('get')
-        ->times($analyticsCalls)
-        ->andReturn(new LeaderboardAnalyticsData([], [], []));
+    if ($analytics === null) {
+        $analytics = Mockery::mock(CurrentPlayerCountAnalytics::class);
+        $analytics->shouldReceive('get')
+            ->times($analyticsCalls)
+            ->andReturn([]);
+    }
+    if ($charts === null) {
+        $charts = Mockery::mock(PlayerCountChartService::class);
+        $charts->shouldReceive('generate')
+            ->times($analyticsCalls)
+            ->with(Mockery::type('string'))
+            ->andReturnNull();
+    }
     if ($gateway === null) {
         $gateway = Mockery::mock(TelegramRichMessageGateway::class);
         $gateway->shouldReceive('send')->zeroOrMoreTimes()->andReturnUsing(
@@ -85,6 +118,8 @@ function telegramSettings(
         new TelegramNotificationSubscriptions,
         $analytics,
         new SettingsRichMessageFactory,
+        $charts,
+        new AnalyticsChartMediaFactory,
         $gateway,
         new TelegramSettingsAuthorization($memberGateway),
         new TelegramInboundRateLimiter(app(CacheManager::class)),
@@ -115,8 +150,11 @@ function telegramAdministrator(int $id): ChatMemberAdministrator
     );
 }
 
-function telegramSettingsCallback(TelegramNotification $subscription, int $actorId = 1201): Update
-{
+function telegramSettingsCallback(
+    TelegramNotification $subscription,
+    int $actorId = 1201,
+    ?string $data = null,
+): Update {
     $message = [
         'message_id' => 10,
         'date' => 1,
@@ -134,7 +172,7 @@ function telegramSettingsCallback(TelegramNotification $subscription, int $actor
             'id' => 'settings-'.$actorId,
             'from' => ['id' => $actorId, 'is_bot' => false, 'first_name' => 'Actor'],
             'chat_instance' => 'settings',
-            'data' => 'notifications:toggle:'.$subscription->id,
+            'data' => $data ?? 'notifications:toggle:'.$subscription->id,
             'message' => $message,
         ],
     ]);
@@ -145,12 +183,13 @@ test('notification migration and model use recurring defaults and signed bigint 
 
     expect($notification->instance_id)->toBe(-1001234567890)
         ->and($notification->thread_id)->toBeNull()
+        ->and($notification->locale)->toBe('ru')
         ->and($notification->send_time)->toBe('00:00:00')
         ->and($notification->enabled)->toBeFalse()
         ->and($notification->next_send_at)->toBeNull()
         ->and($notification->last_sent_at)->toBeNull()
         ->and(Schema::hasColumns('telegram_notifications', [
-            'id', 'instance_id', 'thread_id', 'context_key', 'send_time', 'enabled', 'next_send_at', 'last_sent_at', 'created_at', 'updated_at',
+            'id', 'instance_id', 'thread_id', 'context_key', 'locale', 'send_time', 'enabled', 'next_send_at', 'last_sent_at', 'created_at', 'updated_at',
         ]))->toBeTrue();
 
     $columns = collect(DB::select("PRAGMA table_info('telegram_notifications')"))->keyBy('name');
@@ -158,6 +197,83 @@ test('notification migration and model use recurring defaults and signed bigint 
     expect(strtoupper($columns['instance_id']->type))->toBe('INTEGER')
         ->and(strtoupper($columns['thread_id']->type))->toBe('INTEGER')
         ->and(strtoupper($columns['send_time']->type))->toContain('TIME');
+});
+
+test('locale migration backfills existing subscriptions to ru', function () {
+    $migration = require database_path('migrations/2026_07_22_000000_add_locale_to_telegram_notifications.php');
+    $migration->down();
+    DB::table('telegram_notifications')->insert([
+        'instance_id' => -1001234567890,
+        'thread_id' => 77,
+        'context_key' => '-1001234567890:77',
+        'send_time' => '14:30:00',
+        'enabled' => true,
+        'next_send_at' => '2026-07-23 14:30:00',
+        'last_sent_at' => '2026-07-22 14:30:00',
+        'created_at' => '2026-07-22 00:00:00',
+        'updated_at' => '2026-07-22 00:00:00',
+    ]);
+
+    $migration->up();
+    $subscription = TelegramNotification::query()->sole();
+
+    expect($subscription->locale)->toBe('ru')
+        ->and($subscription->instance_id)->toBe(-1001234567890)
+        ->and($subscription->thread_id)->toBe(77)
+        ->and($subscription->send_time)->toBe('14:30:00')
+        ->and($subscription->enabled)->toBeTrue()
+        ->and($subscription->next_send_at?->toDateTimeString())->toBe('2026-07-23 14:30:00')
+        ->and($subscription->last_sent_at?->toDateTimeString())->toBe('2026-07-22 14:30:00');
+});
+
+test('subscription service persists only supported locales without changing scope or scheduling state', function (string $locale) {
+    $subscription = TelegramNotification::query()->create([
+        'instance_id' => -1001234567890,
+        'thread_id' => 77,
+        'send_time' => '14:30:00',
+        'enabled' => true,
+        'next_send_at' => '2026-07-23 14:30:00',
+        'last_sent_at' => '2026-07-22 14:30:00',
+    ]);
+
+    $updated = (new TelegramNotificationSubscriptions)->updateLocale($subscription, $locale);
+
+    expect($updated->locale)->toBe($locale)
+        ->and($updated->instance_id)->toBe(-1001234567890)
+        ->and($updated->thread_id)->toBe(77)
+        ->and($updated->send_time)->toBe('14:30:00')
+        ->and($updated->enabled)->toBeTrue()
+        ->and($updated->next_send_at?->toDateTimeString())->toBe('2026-07-23 14:30:00')
+        ->and($updated->last_sent_at?->toDateTimeString())->toBe('2026-07-22 14:30:00');
+})->with(['ru', 'en']);
+
+test('subscription service rejects an unsupported locale without mutation', function (string $locale) {
+    $subscription = TelegramNotification::query()->create([
+        'instance_id' => 123,
+        'locale' => 'en',
+    ]);
+
+    expect(fn () => (new TelegramNotificationSubscriptions)->updateLocale($subscription, $locale))
+        ->toThrow(InvalidArgumentException::class, 'Unsupported Telegram subscription locale.');
+
+    expect($subscription->refresh()->locale)->toBe('en');
+})->with(['RU', 'de', '', 'en_US']);
+
+test('root and topic subscriptions persist locales independently', function () {
+    // Arrange: one chat has distinct root and topic subscriptions with the RU default.
+    $subscriptions = new TelegramNotificationSubscriptions;
+    $root = $subscriptions->findOrCreate(new TelegramContext(-1001234567890, null));
+    $topic = $subscriptions->findOrCreate(new TelegramContext(-1001234567890, 77));
+
+    // Act: choose a different locale in each independently scoped subscription.
+    $subscriptions->updateLocale($root, 'ru');
+    $subscriptions->updateLocale($topic, 'en');
+
+    // Assert: changing the topic does not leak into the chat root.
+    expect($root->refresh()->locale)->toBe('ru')
+        ->and($topic->refresh()->locale)->toBe('en')
+        ->and($root->context_key)->toBe('-1001234567890:root')
+        ->and($topic->context_key)->toBe('-1001234567890:77');
 });
 
 test('notification scheduling migration exposes indexed portable scheduling state', function () {
@@ -569,6 +685,168 @@ test('message not modified is a successful callback no-op without fallback', fun
     expect($changed?->enabled)->toBeTrue();
 });
 
+test('start uses latest persisted minute totals with per range period fallback without upstream calls', function () {
+    config()->set('telegram_notifications.inbound_rate_limit.cache_store', 'array');
+    $sampledAt = CarbonImmutable::parse('2026-07-22 12:35:00', 'UTC');
+    telegramAnalyticsPeriod('day', '2026-07-21', '2026-07-21', 100, $sampledAt->subDay());
+    telegramAnalyticsPeriod('day', '2026-07-22', '2026-07-22', 140, $sampledAt);
+    telegramAnalyticsPeriod('week', '2026-07-13', '2026-07-19', 500, $sampledAt->subWeek());
+    telegramAnalyticsPeriod('week', '2026-07-20', '2026-07-26', 550, $sampledAt);
+    telegramAnalyticsPeriod('month', '2026-06-01', '2026-06-30', 1000, $sampledAt->subMonth());
+    telegramAnalyticsPeriod('month', '2026-07-01', '2026-07-31', 1200, $sampledAt);
+    PixelWorldPlayerTotal::query()->create(['range' => 'day', 'total' => 150, 'collected_at' => $sampledAt->subMinute()]);
+    PixelWorldPlayerTotal::query()->create(['range' => 'day', 'total' => 151, 'collected_at' => $sampledAt]);
+    PixelWorldPlayerTotal::query()->create(['range' => 'month', 'total' => 1250, 'collected_at' => $sampledAt]);
+
+    app()->instance(LeaderboardClient::class, Mockery::mock(LeaderboardClient::class)->shouldNotReceive('page')->getMock());
+    app()->instance(PixelWorldTokenProvider::class, Mockery::mock(PixelWorldTokenProvider::class)->shouldNotReceive('token')->getMock());
+    app()->instance(PlayerTotalCollector::class, Mockery::mock(PlayerTotalCollector::class)->shouldNotReceive('collect')->getMock());
+    app()->instance(LeaderboardAnalytics::class, Mockery::mock(LeaderboardAnalytics::class)->shouldNotReceive('get')->getMock());
+
+    $sent = null;
+    $gateway = Mockery::mock(TelegramRichMessageGateway::class);
+    $gateway->shouldReceive('send')->once()->andReturnUsing(
+        function (int $chatId, InputRichMessage $message) use (&$sent): Message {
+            $sent = $message;
+
+            return telegramMessage($chatId);
+        },
+    );
+    $charts = Mockery::mock(PlayerCountChartService::class);
+    $charts->shouldReceive('generate')->once()->with('ru')->andReturnNull();
+    $update = telegramUpdate([
+        'update_id' => 1701,
+        'message' => [
+            'message_id' => 1,
+            'date' => 1,
+            'chat' => ['id' => 1701, 'type' => 'private'],
+            'from' => ['id' => 1701, 'is_bot' => false, 'first_name' => 'Private'],
+            'text' => '/start',
+        ],
+    ]);
+
+    telegramSettings(null, gateway: $gateway, analytics: new CurrentPlayerCountAnalytics, charts: $charts)->show($update);
+
+    $rows = $sent->blocks[1]->cells;
+    expect([$rows[1][1]->text, $rows[1][2]->text])->toBe(['151', '+51'])
+        ->and([$rows[2][1]->text, $rows[2][2]->text])->toBe(['550', '+50'])
+        ->and([$rows[3][1]->text, $rows[3][2]->text])->toBe(['1 250', '+250']);
+});
+
+test('locale callback persists language and refreshes exact english controls in subscription scope', function () {
+    config()->set('telegram_notifications.inbound_rate_limit.cache_store', 'array');
+    $subscription = TelegramNotification::query()->create([
+        'instance_id' => -1801,
+        'thread_id' => 81,
+        'locale' => 'ru',
+    ]);
+    $keyboard = null;
+    $gateway = Mockery::mock(TelegramRichMessageGateway::class);
+    $gateway->shouldReceive('updateMessage')->once()->andReturnUsing(
+        function (InputRichMessage $message, InlineKeyboardMarkup $markup) use (&$keyboard): true {
+            $keyboard = $markup;
+
+            return true;
+        },
+    );
+    $charts = Mockery::mock(PlayerCountChartService::class);
+    $charts->shouldReceive('generate')->once()->with('en')->andReturnNull();
+    $callback = telegramSettingsCallback(
+        $subscription,
+        1801,
+        'notifications:locale:en:'.$subscription->id,
+    );
+
+    $changed = telegramSettings(
+        telegramAdministrator(1801),
+        analyticsCalls: 1,
+        gateway: $gateway,
+        charts: $charts,
+    )->updateLocale($callback);
+
+    $controls = $keyboard->toRequestArray()['inline_keyboard'];
+    expect($changed?->locale)->toBe('en')
+        ->and($subscription->refresh()->locale)->toBe('en')
+        ->and(array_column($controls[1], 'text'))->toBe(['RU', 'EN'])
+        ->and(array_column($controls[1], 'callback_data'))->toBe([
+            'notifications:locale:ru:'.$subscription->id,
+            'notifications:locale:en:'.$subscription->id,
+        ]);
+});
+
+test('locale callback preserves authorization and topic safety', function () {
+    config()->set('telegram_notifications.inbound_rate_limit.cache_store', 'array');
+    $subscription = TelegramNotification::query()->create([
+        'instance_id' => -1901,
+        'thread_id' => 91,
+        'locale' => 'ru',
+    ]);
+    $authorizedCallback = telegramSettingsCallback(
+        $subscription,
+        1901,
+        'notifications:locale:en:'.$subscription->id,
+    );
+
+    expect(telegramSettings(new ChatMemberMember(telegramUser(1901)))->updateLocale($authorizedCallback))->toBeNull()
+        ->and($subscription->refresh()->locale)->toBe('ru');
+
+    $wrongTopic = telegramUpdate([
+        'update_id' => 1902,
+        'callback_query' => [
+            'id' => 'wrong-topic',
+            'from' => ['id' => 1902, 'is_bot' => false, 'first_name' => 'Admin'],
+            'chat_instance' => 'topic',
+            'data' => 'notifications:locale:en:'.$subscription->id,
+            'message' => [
+                'message_id' => 2,
+                'date' => 1,
+                'chat' => ['id' => -1901, 'type' => 'supergroup'],
+                'message_thread_id' => 92,
+                'is_topic_message' => true,
+            ],
+        ],
+    ]);
+
+    expect(fn () => telegramSettings(telegramAdministrator(1902))->updateLocale($wrongTopic))
+        ->toThrow(ModelNotFoundException::class);
+    expect($subscription->refresh()->locale)->toBe('ru');
+});
+
+test('start chart failure logs a warning and sends chartless localized settings', function () {
+    config()->set('telegram_notifications.inbound_rate_limit.cache_store', 'array');
+    $subscription = TelegramNotification::query()->create(['instance_id' => 2001, 'locale' => 'en']);
+    $charts = Mockery::mock(PlayerCountChartService::class);
+    $charts->shouldReceive('generate')->once()->with('en')->andThrow(new RuntimeException('renderer failed'));
+    Log::shouldReceive('warning')->once()->with(
+        'Telegram settings chart generation failed; sending settings without it.',
+        ['subscription_id' => $subscription->id, 'locale' => 'en'],
+    );
+    $gateway = Mockery::mock(TelegramRichMessageGateway::class);
+    $gateway->shouldReceive('send')->once()->withArgs(
+        function (int $chatId, InputRichMessage $message): bool {
+            return $chatId === 2001 && count($message->blocks) === 2;
+        },
+    )->andReturn(telegramMessage(2001));
+    $analytics = Mockery::mock(CurrentPlayerCountAnalytics::class);
+    $analytics->shouldReceive('get')->once()->andReturn([
+        new PlayerCountTrendData('day', 100, 90, 10),
+    ]);
+    $update = telegramUpdate([
+        'update_id' => 2001,
+        'message' => [
+            'message_id' => 1,
+            'date' => 1,
+            'chat' => ['id' => 2001, 'type' => 'private'],
+            'from' => ['id' => 2001, 'is_bot' => false, 'first_name' => 'Private'],
+            'text' => '/start',
+        ],
+    ]);
+
+    $shown = telegramSettings(null, gateway: $gateway, analytics: $analytics, charts: $charts)->show($update);
+
+    expect($shown?->locale)->toBe('en');
+});
+
 test('unauthorized callback remains a no-op without edit fallback', function () {
     config()->set('telegram_notifications.inbound_rate_limit.cache_store', 'array');
     $subscription = TelegramNotification::query()->create([
@@ -619,7 +897,7 @@ test('enabling after send time suppresses same day catch up', function () {
         ->and($subscriptions->due($now->addDay()))->toHaveCount(1);
 });
 
-test('settings view contains native player table status time and inline keyboard', function () {
+test('settings view contains only player statistics and compact controls', function () {
     $subscription = TelegramNotification::query()->create([
         'instance_id' => 1, 'send_time' => '14:30:00', 'enabled' => true,
     ]);
@@ -631,12 +909,15 @@ test('settings view contains native player table status time and inline keyboard
 
     $view = (new SettingsRichMessageFactory)->make($analytics, $subscription);
 
-    expect($view->message->blocks)->toHaveCount(4)
-        ->and($view->message->blocks[2]->cells)->toHaveCount(4)
+    expect($view->message->blocks)->toHaveCount(2)
+        ->and($view->message->blocks[1]->cells)->toHaveCount(4)
         ->and($view->keyboard->toRequestArray())->toBe([
             'inline_keyboard' => [[
                 ['text' => '🔕 Выключить', 'callback_data' => 'notifications:toggle:'.$subscription->id],
                 ['text' => '🔄 Обновить', 'callback_data' => 'notifications:refresh:'.$subscription->id],
+            ], [
+                ['text' => 'RU', 'callback_data' => 'notifications:locale:ru:'.$subscription->id],
+                ['text' => 'EN', 'callback_data' => 'notifications:locale:en:'.$subscription->id],
             ]],
         ]);
 });
@@ -697,6 +978,7 @@ test('dispatcher builds once continues failures marks only successes and passes 
     };
     $digest = new InputRichMessage(blocks: []);
     $builder = Mockery::mock(AnalyticsDigestBuilder::class);
+    $builder->shouldReceive('prepare')->once()->andReturn(telegramDigestData());
     $builder->shouldReceive('build')->once()->andReturn($digest);
     CarbonImmutable::setTestNow($now);
     $repository = new TelegramNotificationSubscriptions;
@@ -719,6 +1001,36 @@ test('dispatcher builds once continues failures marks only successes and passes 
     CarbonImmutable::setTestNow();
 });
 
+test('scheduled digest uses period trends and chart failure degrades only its locale', function () {
+    $trends = Mockery::mock(PeriodPlayerCountTrends::class);
+    $trends->shouldReceive('get')->twice()->andReturn([
+        new PlayerCountTrendData('day', 100, 90, 10),
+    ]);
+    $charts = Mockery::mock(PlayerCountChartService::class);
+    $chartData = new PlayerCountChartData([], []);
+    $charts->shouldReceive('data')->twice()->andReturn($chartData);
+    $charts->shouldReceive('generateFromData')->once()->with($chartData, 'ru')->andReturnNull();
+    $charts->shouldReceive('generateFromData')->once()->with($chartData, 'en')->andThrow(new RuntimeException('renderer failed'));
+    Log::shouldReceive('warning')->once()->with(
+        'Analytics chart generation failed; sending digest without it.',
+        ['locale' => 'en'],
+    );
+    $builder = new AnalyticsDigestBuilder(
+        $trends,
+        new AnalyticsRichMessageFactory,
+        $charts,
+        new AnalyticsChartMediaFactory,
+    );
+
+    $russian = $builder->build('ru');
+    $english = $builder->build('en');
+
+    expect($russian->blocks)->toHaveCount(2)
+        ->and($russian->blocks[0]->text)->toBe('Pixel World · Статистика')
+        ->and($english->blocks)->toHaveCount(2)
+        ->and($english->blocks[0]->text)->toBe('Pixel World · Statistics');
+});
+
 test('a stale pre midnight dispatch cannot duplicate or move a new day delivery backwards', function () {
     config()->set('telegram_notifications.rate_limit.cache_store', 'array');
     $oldRun = CarbonImmutable::parse('2026-07-21 23:59:00', 'UTC');
@@ -731,6 +1043,7 @@ test('a stale pre midnight dispatch cannot duplicate or move a new day delivery 
     ]);
     $digest = new InputRichMessage(blocks: []);
     $builder = Mockery::mock(AnalyticsDigestBuilder::class);
+    $builder->shouldReceive('prepare')->once()->andReturn(telegramDigestData());
     $builder->shouldReceive('build')->once()->andReturn($digest);
     $gateway = new class implements TelegramRichMessageGateway
     {
@@ -869,6 +1182,7 @@ test('429 retry_after persists a non blocking retry and publishes shared cooldow
     $sleeper->shouldReceive('milliseconds')->once()->with(Mockery::on(fn (int $wait): bool => $wait >= 119_000));
     $limiter = new TelegramRateLimiter($sleeper);
     $builder = Mockery::mock(AnalyticsDigestBuilder::class);
+    $builder->shouldReceive('prepare')->once()->andReturn(telegramDigestData());
     $builder->shouldReceive('build')->once()->andReturn(new InputRichMessage(blocks: []));
     $repository = new TelegramNotificationSubscriptions;
     $dispatcher = new TelegramNotificationDispatcher(
@@ -897,6 +1211,7 @@ test('transient exceptions use configured capped backoff without logging excepti
     $gateway = Mockery::mock(TelegramRichMessageGateway::class);
     $gateway->shouldReceive('send')->once()->andThrow(new RuntimeException('secret-token-in-message'));
     $builder = Mockery::mock(AnalyticsDigestBuilder::class);
+    $builder->shouldReceive('prepare')->once()->andReturn(telegramDigestData());
     $builder->shouldReceive('build')->once()->andReturn(new InputRichMessage(blocks: []));
     $repository = new TelegramNotificationSubscriptions;
     CarbonImmutable::setTestNow($now);
@@ -917,6 +1232,56 @@ test('transient exceptions use configured capped backoff without logging excepti
     CarbonImmutable::setTestNow();
 });
 
+test('digest preparation failure durably releases every sendable claim for retry', function () {
+    config()->set('telegram_notifications.delivery.backoff_seconds', [17]);
+    config()->set('telegram_notifications.delivery.max_attempts', 5);
+    $now = CarbonImmutable::parse('2026-07-21 12:30:00', 'UTC');
+
+    foreach ([46, 47] as $instanceId) {
+        TelegramNotification::query()->create([
+            'instance_id' => $instanceId,
+            'locale' => 'ru',
+            'enabled' => true,
+            'next_send_at' => $now,
+        ]);
+    }
+
+    $repository = new TelegramNotificationSubscriptions;
+    $claims = $repository->claimDue($now, 2, 30);
+    $builder = Mockery::mock(AnalyticsDigestBuilder::class);
+    $builder->shouldReceive('prepare')->once()->andReturn(telegramDigestData());
+    $builder->shouldReceive('build')->once()->andThrow(new RuntimeException('secret-data-source-detail'));
+    $sender = Mockery::mock(TelegramNotificationSender::class);
+    $sender->shouldNotReceive('deliver');
+    Log::shouldReceive('error')->once()->with(
+        'Telegram digest preparation failed; durable delivery outcomes were recorded.',
+        ['delivery_count' => 2, 'locale' => 'ru'],
+    );
+    Log::shouldNotReceive('critical');
+    CarbonImmutable::setTestNow($now);
+
+    $sent = (new TelegramNotificationDispatcher($repository, $builder, $sender))
+        ->deliver($claims->modelKeys(), (string) $claims->firstOrFail()->claim_token);
+    $deliveries = TelegramNotificationDelivery::query()->orderBy('id')->get();
+
+    expect($sent)->toBe(0)
+        ->and($deliveries->pluck('status')->all())->toBe([
+            TelegramNotificationDelivery::STATUS_FAILED,
+            TelegramNotificationDelivery::STATUS_FAILED,
+        ])
+        ->and($deliveries->pluck('attempt_count')->all())->toBe([1, 1])
+        ->and($deliveries->pluck('last_error')->all())->toBe([
+            'digest_preparation_failed',
+            'digest_preparation_failed',
+        ])
+        ->and($deliveries->every(fn (TelegramNotificationDelivery $delivery): bool => $delivery->next_attempt_at->equalTo($now->addSeconds(17))
+            && $delivery->claim_token === null
+            && $delivery->claim_expires_at === null
+        ))->toBeTrue();
+
+    CarbonImmutable::setTestNow();
+});
+
 test('permanent Telegram 4xx failure is terminal and disables subscription', function () {
     $now = CarbonImmutable::parse('2026-07-21 12:30:00', 'UTC');
     $subscription = TelegramNotification::query()->create([
@@ -927,6 +1292,7 @@ test('permanent Telegram 4xx failure is terminal and disables subscription', fun
         new SendChatAction(43, 'typing'), new ApiResponse(403, '{}'), 'Forbidden', errorCode: 403,
     ));
     $builder = Mockery::mock(AnalyticsDigestBuilder::class);
+    $builder->shouldReceive('prepare')->once()->andReturn(telegramDigestData());
     $builder->shouldReceive('build')->once()->andReturn(new InputRichMessage(blocks: []));
     $repository = new TelegramNotificationSubscriptions;
     CarbonImmutable::setTestNow($now);
@@ -956,6 +1322,7 @@ test('transient retry exhaustion is terminal for the occurrence', function () {
     $gateway = Mockery::mock(TelegramRichMessageGateway::class);
     $gateway->shouldReceive('send')->once()->andThrow(new RuntimeException('network down'));
     $builder = Mockery::mock(AnalyticsDigestBuilder::class);
+    $builder->shouldReceive('prepare')->once()->andReturn(telegramDigestData());
     $builder->shouldReceive('build')->once()->andReturn(new InputRichMessage(blocks: []));
     $repository = new TelegramNotificationSubscriptions;
     CarbonImmutable::setTestNow($now);
@@ -1024,3 +1391,22 @@ test('notification artisan command and minutely protected schedule are registere
         ->expectsOutputToContain('telegram:notifications:send')
         ->assertSuccessful();
 });
+
+function telegramAnalyticsPeriod(
+    string $range,
+    string $start,
+    string $end,
+    int $total,
+    DateTimeInterface $collectedAt,
+): PixelWorldLeaderboardPeriod {
+    return PixelWorldLeaderboardPeriod::query()->create([
+        'range' => $range,
+        'period_start' => $start,
+        'period_end' => $end,
+        'total' => $total,
+        'entries_count' => 0,
+        'missing_places' => 0,
+        'is_partial' => false,
+        'last_collected_at' => $collectedAt,
+    ]);
+}

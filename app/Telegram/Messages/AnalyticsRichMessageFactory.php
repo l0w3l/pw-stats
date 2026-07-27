@@ -5,12 +5,8 @@ declare(strict_types=1);
 namespace App\Telegram\Messages;
 
 use App\Data\PixelWorld\Analytics\LeaderboardAnalyticsData;
-use App\Data\PixelWorld\Analytics\PlayerActivityData;
 use App\Data\PixelWorld\Analytics\PlayerCountTrendData;
-use App\Data\PixelWorld\Analytics\PlayerMomentumData;
-use Illuminate\Support\Str;
-use Phptg\BotApi\Type\InputRichBlockDivider;
-use Phptg\BotApi\Type\InputRichBlockFooter;
+use Illuminate\Contracts\Translation\Translator;
 use Phptg\BotApi\Type\InputRichBlockParagraph;
 use Phptg\BotApi\Type\InputRichBlockPhoto;
 use Phptg\BotApi\Type\InputRichBlockSectionHeading;
@@ -22,27 +18,32 @@ use Phptg\BotApi\Type\RichTextBold;
 
 class AnalyticsRichMessageFactory
 {
-    public function make(LeaderboardAnalyticsData $analytics, ?InputRichBlockPhoto $chart = null): InputRichMessage
+    private readonly TelegramTranslations $translations;
+
+    public function __construct(?TelegramTranslations $translations = null)
     {
-        $blocks = [new InputRichBlockSectionHeading('Pixel World · Статистика', 1)];
+        $this->translations = $translations ?? new TelegramTranslations(app(Translator::class));
+    }
+
+    public function make(
+        LeaderboardAnalyticsData $analytics,
+        ?InputRichBlockPhoto $chart = null,
+        ?string $locale = null,
+    ): InputRichMessage {
+        $locale = $this->translations->locale($locale);
+        $blocks = [new InputRichBlockSectionHeading(
+            $this->translations->get('telegram.headings.digest', $locale),
+            1,
+        )];
 
         if ($analytics->isEmpty()) {
-            $blocks[] = new InputRichBlockParagraph('Завершённых периодов пока нет. Попробуйте снова после первого успешного сбора статистики.');
+            $blocks[] = new InputRichBlockParagraph($this->translations->get('telegram.empty', $locale));
 
             return new InputRichMessage(blocks: $blocks);
         }
 
-        if ($analytics->latestCollectedAt) {
-            $blocks[] = new InputRichBlockParagraph([
-                'Последний успешный сбор: ',
-                new RichTextBold($analytics->latestCollectedAt->utc()->format('d.m.Y H:i').' UTC'),
-            ]);
-        }
-
-        $blocks[] = new InputRichBlockSectionHeading('Динамика игроков', 2);
-        $blocks[] = new InputRichBlockParagraph('Изменение числа активных игроков относительно предыдущего календарного периода.');
         $blocks[] = new InputRichBlockTable(
-            cells: $this->playerCountRows($analytics->playerCountTrends),
+            cells: $this->playerCountRows($analytics->playerCountTrends, $locale),
             isBordered: true,
             isStriped: true,
         );
@@ -51,39 +52,6 @@ class AnalyticsRichMessageFactory
             $blocks[] = $chart;
         }
 
-        $blocks[] = new InputRichBlockDivider;
-        $blocks[] = new InputRichBlockSectionHeading('Убийств в день', 2);
-        $blocks[] = new InputRichBlockParagraph('Среднее по окну: WEEK ÷ 7, MONTH ÷ 30.');
-
-        if ($analytics->mostActivePlayers === []) {
-            $blocks[] = new InputRichBlockParagraph('Недостаточно данных WEEK и MONTH.');
-        } else {
-            $blocks[] = new InputRichBlockTable(
-                cells: $this->activityRows($analytics->mostActivePlayers),
-                isBordered: true,
-                isStriped: true,
-                caption: 'Самые активные игроки',
-            );
-        }
-
-        $blocks[] = new InputRichBlockDivider;
-        $blocks[] = new InputRichBlockSectionHeading('Набирают темп', 2);
-
-        if ($analytics->momentumPlayers === []) {
-            $blocks[] = new InputRichBlockParagraph('Для расчёта нужен предыдущий DAY период.');
-        } else {
-            $blocks[] = new InputRichBlockParagraph(
-                'Прирост убийств и движение в рейтинге относительно предыдущего DAY периода.',
-            );
-            $blocks[] = new InputRichBlockTable(
-                cells: $this->momentumRows($analytics->momentumPlayers),
-                isBordered: true,
-                isStriped: true,
-            );
-        }
-
-        $blocks[] = new InputRichBlockFooter('Новые данные появляются после завершения очередного сбора.');
-
         return new InputRichMessage(blocks: $blocks);
     }
 
@@ -91,69 +59,26 @@ class AnalyticsRichMessageFactory
      * @param  array<PlayerCountTrendData>  $trends
      * @return array<int, array<int, RichBlockTableCell>>
      */
-    private function playerCountRows(array $trends): array
+    private function playerCountRows(array $trends, string $locale): array
     {
-        $rows = [$this->headerRow(['Период', 'Игроки', 'Δ / интервал'])];
+        $rows = [$this->headerRow([
+            $this->translations->get('telegram.table.period', $locale),
+            $this->translations->get('telegram.table.players', $locale),
+            $this->translations->get('telegram.table.delta', $locale),
+        ])];
 
         foreach ($trends as $trend) {
-            $change = $trend->delta === null ? '—' : sprintf('%+d', $trend->delta);
-
             $rows[] = [
-                $this->cell($this->rangeLabel($trend->range)),
+                $this->cell($this->translations->get("telegram.periods.{$trend->range}", $locale)),
                 $this->cell(number_format($trend->current, 0, '.', ' '), align: 'right'),
-                $this->cell($change, align: 'right'),
+                $this->cell($trend->delta === null ? '—' : sprintf('%+d', $trend->delta), align: 'right'),
             ];
         }
 
         return $rows;
     }
 
-    /**
-     * @param  array<PlayerActivityData>  $players
-     * @return array<int, array<int, RichBlockTableCell>>
-     */
-    private function activityRows(array $players): array
-    {
-        $rows = [$this->headerRow(['Период', 'Игрок', 'Уб./день', 'Всего'])];
-
-        foreach ($players as $player) {
-            $rows[] = [
-                $this->cell(strtoupper($player->range)),
-                $this->cell(Str::limit($player->nickname, 20)),
-                $this->cell(number_format($player->killsPerDay, 1, '.', ' '), align: 'right'),
-                $this->cell(number_format($player->kills, 0, '.', ' '), align: 'right'),
-            ];
-        }
-
-        return $rows;
-    }
-
-    /**
-     * @param  array<PlayerMomentumData>  $players
-     * @return array<int, array<int, RichBlockTableCell>>
-     */
-    private function momentumRows(array $players): array
-    {
-        $rows = [$this->headerRow(['Игрок', '+ убийств', 'Места'])];
-
-        foreach ($players as $player) {
-            $rank = match (true) {
-                $player->rankDelta > 0 => "↑ {$player->rankDelta}",
-                $player->rankDelta < 0 => '↓ '.abs($player->rankDelta),
-                default => '—',
-            };
-
-            $rows[] = [
-                $this->cell(Str::limit($player->nickname, 24)),
-                $this->cell(sprintf('%+d', $player->killsDelta), align: 'right'),
-                $this->cell($rank, align: 'right'),
-            ];
-        }
-
-        return $rows;
-    }
-
-    /** @return array<int, RichBlockTableCell> */
+    /** @param list<string> $labels @return array<int, RichBlockTableCell> */
     private function headerRow(array $labels): array
     {
         return array_map(fn (string $label): RichBlockTableCell => $this->cell(
@@ -173,15 +98,5 @@ class AnalyticsRichMessageFactory
             text: $text,
             isHeader: $header ? true : null,
         );
-    }
-
-    private function rangeLabel(string $range): string
-    {
-        return match ($range) {
-            'day' => 'DAY',
-            'week' => 'WEEK',
-            'month' => 'MONTH',
-            default => strtoupper($range),
-        };
     }
 }

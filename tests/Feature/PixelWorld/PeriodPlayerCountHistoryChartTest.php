@@ -4,7 +4,9 @@ use App\Data\PixelWorld\Analytics\PlayerCountChartData;
 use App\Models\PixelWorldLeaderboardPeriod;
 use App\Queries\PeriodPlayerCountHistory;
 use App\Services\PixelWorld\Charts\ChartRenderer;
+use App\Services\PixelWorld\Charts\ImagickSvgChartRenderer;
 use App\Services\PixelWorld\Charts\PlayerCountChartService;
+use App\Telegram\Messages\TelegramTranslations;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\File;
@@ -46,7 +48,7 @@ test('chart service uses a deterministic period cache with a fake renderer', fun
             return 'fake-v1';
         }
 
-        public function render(PlayerCountChartData $data, int $width, int $height): string
+        public function render(PlayerCountChartData $data, int $width, int $height, string $locale): string
         {
             $this->renders++;
 
@@ -55,7 +57,7 @@ test('chart service uses a deterministic period cache with a fake renderer', fun
     };
 
     try {
-        $service = new PlayerCountChartService(new PeriodPlayerCountHistory, $renderer);
+        $service = new PlayerCountChartService(new PeriodPlayerCountHistory, $renderer, app(TelegramTranslations::class));
         $first = $service->generate();
         $second = $service->generate();
 
@@ -67,6 +69,64 @@ test('chart service uses a deterministic period cache with a fake renderer', fun
     } finally {
         File::deleteDirectory($directory);
     }
+});
+
+test('chart cache is isolated by normalized locale and reused within that locale', function () {
+    chartPeriod('day', '2026-07-20', 105);
+    $directory = storage_path('framework/testing/analytics-chart-'.bin2hex(random_bytes(4)));
+    config()->set('analytics_chart.cache_path', $directory);
+
+    $renderer = new class implements ChartRenderer
+    {
+        /** @var list<string> */
+        public array $locales = [];
+
+        public function version(): string
+        {
+            return 'fake-v1';
+        }
+
+        public function render(PlayerCountChartData $data, int $width, int $height, string $locale): string
+        {
+            $this->locales[] = $locale;
+
+            return 'render-'.$locale;
+        }
+    };
+
+    try {
+        $service = new PlayerCountChartService(new PeriodPlayerCountHistory, $renderer, app(TelegramTranslations::class));
+        $english = $service->generate('en');
+        $englishAgain = $service->generate('en');
+        $russian = $service->generate('ru');
+        $unsupported = $service->generate('de');
+
+        expect($english)->not->toBeNull()
+            ->and($englishAgain?->cacheKey)->toBe($english->cacheKey)
+            ->and($russian)->not->toBeNull()
+            ->and($russian->cacheKey)->not->toBe($english->cacheKey)
+            ->and($unsupported?->cacheKey)->toBe($russian->cacheKey)
+            ->and($renderer->locales)->toBe(['en', 'ru']);
+    } finally {
+        File::deleteDirectory($directory);
+    }
+});
+
+test('svg renderer localizes visible chart text without changing partial markers', function () {
+    chartPeriod('day', '2026-07-20', 105, partial: true);
+    $data = (new PeriodPlayerCountHistory)->get(['day' => 30, 'week' => 12, 'month' => 12]);
+    $renderer = new ImagickSvgChartRenderer(app(TelegramTranslations::class));
+    $svg = new ReflectionMethod($renderer, 'svg');
+
+    $english = $svg->invoke($renderer, $data, 1200, 675, 'en');
+    $russian = $svg->invoke($renderer, $data, 1200, 675, 'ru');
+    $unsupported = $svg->invoke($renderer, $data, 1200, 675, 'unsupported');
+
+    expect($english)->toContain('Player count history by calendar period', '>Day<', '>No data<')
+        ->and($english)->not->toContain('История числа игроков')
+        ->and($russian)->toContain('История числа игроков по календарным периодам', '>День<', '>Нет данных<')
+        ->and($unsupported)->toBe($russian)
+        ->and(substr_count($english, 'stroke="#f59e0b"'))->toBe(1);
 });
 
 test('chart cache ignores collection freshness but invalidates rendered point changes', function () {
@@ -85,14 +145,14 @@ test('chart cache ignores collection freshness but invalidates rendered point ch
             return 'fake-v1';
         }
 
-        public function render(PlayerCountChartData $data, int $width, int $height): string
+        public function render(PlayerCountChartData $data, int $width, int $height, string $locale): string
         {
             return 'render-'.++$this->renders;
         }
     };
 
     try {
-        $service = new PlayerCountChartService(new PeriodPlayerCountHistory, $renderer);
+        $service = new PlayerCountChartService(new PeriodPlayerCountHistory, $renderer, app(TelegramTranslations::class));
         $initial = $service->generate();
 
         PixelWorldLeaderboardPeriod::query()
@@ -142,14 +202,14 @@ test('chart cache invalidates rendering configuration changes', function () {
             return $this->rendererVersion;
         }
 
-        public function render(PlayerCountChartData $data, int $width, int $height): string
+        public function render(PlayerCountChartData $data, int $width, int $height, string $locale): string
         {
             return 'render-'.++$this->renders;
         }
     };
 
     try {
-        $service = new PlayerCountChartService(new PeriodPlayerCountHistory, $renderer);
+        $service = new PlayerCountChartService(new PeriodPlayerCountHistory, $renderer, app(TelegramTranslations::class));
         $keys = [$service->generate()?->cacheKey];
 
         config()->set('analytics_chart.width', 1300);

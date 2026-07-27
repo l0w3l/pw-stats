@@ -8,6 +8,7 @@ use App\Data\PixelWorld\Analytics\ChartArtifact;
 use App\Data\PixelWorld\Analytics\PlayerCountChartData;
 use App\Data\PixelWorld\Analytics\PlayerCountChartPoint;
 use App\Queries\PeriodPlayerCountHistory;
+use App\Telegram\Messages\TelegramTranslations;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 use RuntimeException;
@@ -17,24 +18,36 @@ class PlayerCountChartService
     public function __construct(
         private readonly PeriodPlayerCountHistory $history,
         private readonly ChartRenderer $renderer,
+        private readonly TelegramTranslations $translations,
     ) {}
 
-    public function generate(): ?ChartArtifact
+    public function generate(?string $locale = null): ?ChartArtifact
+    {
+        return $this->generateFromData($this->data(), $locale);
+    }
+
+    public function data(): PlayerCountChartData
     {
         $periodLimits = [
             'day' => max(2, (int) config('analytics_chart.period_limits.day', 30)),
             'week' => max(2, (int) config('analytics_chart.period_limits.week', 12)),
             'month' => max(2, (int) config('analytics_chart.period_limits.month', 12)),
         ];
+
+        return $this->history->get($periodLimits);
+    }
+
+    public function generateFromData(PlayerCountChartData $data, ?string $locale = null): ?ChartArtifact
+    {
+        $locale = $this->translations->locale($locale);
         $width = max(320, (int) config('analytics_chart.width', 1200));
         $height = max(240, (int) config('analytics_chart.height', 675));
-        $data = $this->history->get($periodLimits);
 
         if ($data->isEmpty()) {
             return null;
         }
 
-        $key = $this->cacheKey($data, $width, $height);
+        $key = $this->cacheKey($data, $width, $height, $locale);
         $directory = (string) config('analytics_chart.cache_path', storage_path('app/private/analytics-charts'));
         $path = $directory.'/'.$key.'.png';
 
@@ -48,7 +61,7 @@ class PlayerCountChartService
 
         try {
             Cache::lock('analytics-chart:'.$key, (int) config('analytics_chart.lock_seconds', 30))
-                ->block((int) config('analytics_chart.lock_wait_seconds', 5), function () use ($data, $width, $height, $path, $directory): void {
+                ->block((int) config('analytics_chart.lock_wait_seconds', 5), function () use ($data, $width, $height, $locale, $path, $directory): void {
                     if (is_file($path)) {
                         return;
                     }
@@ -60,7 +73,7 @@ class PlayerCountChartService
                     }
 
                     try {
-                        $png = $this->renderer->render($data, $width, $height);
+                        $png = $this->renderer->render($data, $width, $height, $locale);
 
                         if (file_put_contents($temporary, $png, LOCK_EX) === false) {
                             throw new RuntimeException('Unable to write the chart file.');
@@ -86,7 +99,7 @@ class PlayerCountChartService
         return new ChartArtifact($path, 'image/png', $width, $height, $key);
     }
 
-    private function cacheKey(PlayerCountChartData $data, int $width, int $height): string
+    private function cacheKey(PlayerCountChartData $data, int $width, int $height, string $locale): string
     {
         $series = [];
 
@@ -106,6 +119,7 @@ class PlayerCountChartService
             'series' => $series,
             'width' => $width,
             'height' => $height,
+            'locale' => $locale,
             'period_limits' => $data->periodLimits,
             'cache_version' => (string) config('analytics_chart.cache_version', '1'),
             'renderer_version' => $this->renderer->version(),

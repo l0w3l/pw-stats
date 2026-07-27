@@ -7,13 +7,16 @@ namespace App\Telegram\Messages;
 use App\Data\PixelWorld\Analytics\LeaderboardAnalyticsData;
 use App\Data\PixelWorld\Analytics\PlayerCountTrendData;
 use App\Models\TelegramNotification;
+use Illuminate\Contracts\Translation\Translator;
 use Phptg\BotApi\Type\InlineKeyboardButton;
 use Phptg\BotApi\Type\InlineKeyboardMarkup;
 use Phptg\BotApi\Type\InputRichBlockParagraph;
+use Phptg\BotApi\Type\InputRichBlockPhoto;
 use Phptg\BotApi\Type\InputRichBlockSectionHeading;
 use Phptg\BotApi\Type\InputRichBlockTable;
 use Phptg\BotApi\Type\InputRichMessage;
 use Phptg\BotApi\Type\RichBlockTableCell;
+use Phptg\BotApi\Type\RichText;
 use Phptg\BotApi\Type\RichTextBold;
 
 class SettingsRichMessageFactory
@@ -22,43 +25,88 @@ class SettingsRichMessageFactory
 
     public const CALLBACK_REFRESH = 'notifications:refresh:';
 
+    public const CALLBACK_LOCALE = 'notifications:locale:';
+
+    private readonly TelegramTranslations $translations;
+
+    public function __construct(?TelegramTranslations $translations = null)
+    {
+        $this->translations = $translations ?? new TelegramTranslations(app(Translator::class));
+    }
+
     public function make(
         LeaderboardAnalyticsData $analytics,
         TelegramNotification $subscription,
+        ?string $locale = null,
+        ?InputRichBlockPhoto $chart = null,
     ): SettingsView {
-        $rows = [[
-            $this->cell(new RichTextBold('Период'), true),
-            $this->cell(new RichTextBold('Игроки'), true),
-            $this->cell(new RichTextBold('Δ'), true),
-        ]];
+        $locale = $this->translations->locale($locale);
+        $blocks = [new InputRichBlockSectionHeading(
+            $this->translations->get('telegram.headings.settings', $locale),
+            1,
+        )];
+
+        if ($analytics->isEmpty()) {
+            $blocks[] = new InputRichBlockParagraph($this->translations->get('telegram.empty', $locale));
+        } else {
+            $blocks[] = new InputRichBlockTable(
+                cells: $this->playerCountRows($analytics, $locale),
+                isBordered: true,
+                isStriped: true,
+            );
+        }
+
+        if ($chart !== null) {
+            $blocks[] = $chart;
+        }
+
+        return new SettingsView(
+            new InputRichMessage(blocks: $blocks),
+            $this->keyboard($subscription, $locale),
+        );
+    }
+
+    /** @return array<int, array<int, RichBlockTableCell>> */
+    private function playerCountRows(LeaderboardAnalyticsData $analytics, string $locale): array
+    {
+        $rows = [$this->headerRow([
+            $this->translations->get('telegram.table.period', $locale),
+            $this->translations->get('telegram.table.players', $locale),
+            $this->translations->get('telegram.table.delta', $locale),
+        ])];
 
         foreach (['day', 'week', 'month'] as $range) {
             $trend = $this->trend($analytics, $range);
             $rows[] = [
-                $this->cell(strtoupper($range)),
+                $this->cell($this->translations->get("telegram.periods.{$range}", $locale)),
                 $this->cell($trend === null ? '—' : number_format($trend->current, 0, '.', ' ')),
                 $this->cell($trend?->delta === null ? '—' : sprintf('%+d', $trend->delta)),
             ];
         }
 
-        $status = $subscription->enabled ? 'включены' : 'выключены';
-        $button = $subscription->enabled ? '🔕 Выключить' : '🔔 Включить';
+        return $rows;
+    }
 
-        return new SettingsView(
-            new InputRichMessage(blocks: [
-                new InputRichBlockSectionHeading('Pixel World · Настройки', 1),
-                new InputRichBlockParagraph('Краткая статистика и ежедневная аналитическая сводка.'),
-                new InputRichBlockTable(cells: $rows, isBordered: true, isStriped: true),
-                new InputRichBlockParagraph([
-                    'Уведомления: ', new RichTextBold($status),
-                    '. Время: ', new RichTextBold(substr($subscription->send_time, 0, 5).' UTC'),
-                ]),
-            ]),
-            new InlineKeyboardMarkup([[
-                new InlineKeyboardButton($button, callbackData: self::CALLBACK_TOGGLE.$subscription->id),
-                new InlineKeyboardButton('🔄 Обновить', callbackData: self::CALLBACK_REFRESH.$subscription->id),
-            ]]),
-        );
+    private function keyboard(TelegramNotification $subscription, string $locale): InlineKeyboardMarkup
+    {
+        $toggle = $subscription->enabled ? 'disable' : 'enable';
+
+        return new InlineKeyboardMarkup([
+            [
+                new InlineKeyboardButton(
+                    $this->translations->get("telegram.controls.{$toggle}", $locale),
+                    callbackData: self::CALLBACK_TOGGLE.$subscription->id,
+                ),
+                new InlineKeyboardButton(
+                    $this->translations->get('telegram.controls.refresh', $locale),
+                    callbackData: self::CALLBACK_REFRESH.$subscription->id,
+                ),
+            ],
+            [
+                new InlineKeyboardButton('RU', callbackData: self::CALLBACK_LOCALE.'ru:'.$subscription->id),
+                new InlineKeyboardButton('EN', callbackData: self::CALLBACK_LOCALE.'en:'.$subscription->id),
+            ],
+        ]);
     }
 
     private function trend(LeaderboardAnalyticsData $analytics, string $range): ?PlayerCountTrendData
@@ -72,7 +120,16 @@ class SettingsRichMessageFactory
         return null;
     }
 
-    private function cell(string|RichTextBold $text, bool $header = false): RichBlockTableCell
+    /** @param list<string> $labels @return array<int, RichBlockTableCell> */
+    private function headerRow(array $labels): array
+    {
+        return array_map(fn (string $label): RichBlockTableCell => $this->cell(
+            new RichTextBold($label),
+            header: true,
+        ), $labels);
+    }
+
+    private function cell(string|RichText $text, bool $header = false): RichBlockTableCell
     {
         return new RichBlockTableCell(
             align: 'left',

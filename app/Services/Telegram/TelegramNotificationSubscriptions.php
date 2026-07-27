@@ -13,9 +13,13 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use InvalidArgumentException;
 
 class TelegramNotificationSubscriptions
 {
+    /** @var list<string> */
+    private const SUPPORTED_LOCALES = ['ru', 'en'];
+
     public function findOrCreate(TelegramContext $context): TelegramNotification
     {
         return TelegramNotification::query()->firstOrCreate(
@@ -36,6 +40,17 @@ class TelegramNotificationSubscriptions
             ->firstOr(function (): never {
                 throw (new ModelNotFoundException)->setModel(TelegramNotification::class);
             });
+    }
+
+    public function updateLocale(TelegramNotification $subscription, string $locale): TelegramNotification
+    {
+        if (! in_array($locale, self::SUPPORTED_LOCALES, true)) {
+            throw new InvalidArgumentException('Unsupported Telegram subscription locale.');
+        }
+
+        $subscription->update(['locale' => $locale]);
+
+        return $subscription->refresh();
     }
 
     public function enable(TelegramContext $context, ?CarbonImmutable $now = null): TelegramNotification

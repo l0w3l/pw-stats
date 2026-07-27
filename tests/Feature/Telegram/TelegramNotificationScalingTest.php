@@ -2,15 +2,23 @@
 
 use App\Contracts\Telegram\Sleeper;
 use App\Contracts\Telegram\TelegramRichMessageGateway;
+use App\Data\PixelWorld\Analytics\AnalyticsDigestData;
+use App\Data\PixelWorld\Analytics\LeaderboardAnalyticsData;
+use App\Data\PixelWorld\Analytics\PlayerCountChartData;
+use App\Data\PixelWorld\Analytics\PlayerCountTrendData;
 use App\Data\Telegram\TelegramContext;
 use App\Jobs\SendTelegramNotificationBatch;
 use App\Models\TelegramNotification;
 use App\Models\TelegramNotificationDelivery;
+use App\Queries\PeriodPlayerCountTrends;
+use App\Services\PixelWorld\Charts\PlayerCountChartService;
 use App\Services\Telegram\TelegramNotificationDispatcher;
 use App\Services\Telegram\TelegramNotificationSender;
 use App\Services\Telegram\TelegramNotificationSubscriptions;
 use App\Services\Telegram\TelegramRateLimiter;
+use App\Telegram\Messages\AnalyticsChartMediaFactory;
 use App\Telegram\Messages\AnalyticsDigestBuilder;
+use App\Telegram\Messages\AnalyticsRichMessageFactory;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -19,6 +27,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
 use Phptg\BotApi\Type\Chat;
+use Phptg\BotApi\Type\InlineKeyboardMarkup;
 use Phptg\BotApi\Type\InputRichMessage;
 use Phptg\BotApi\Type\Message;
 use Predis\Client;
@@ -38,6 +47,14 @@ function postgresConcurrencyUrl(): ?string
     return is_string($url) && $url !== '' ? $url : null;
 }
 
+function scalingDigestData(): AnalyticsDigestData
+{
+    return new AnalyticsDigestData(
+        new LeaderboardAnalyticsData([new PlayerCountTrendData('day', 100, 90, 10)], [], []),
+        new PlayerCountChartData([], []),
+    );
+}
+
 test('duplicate workers cannot claim or deliver one occurrence twice', function () {
     // Arrange: one due occurrence and a fully mocked Telegram boundary.
     $now = CarbonImmutable::parse('2026-07-21 12:30:00', 'UTC');
@@ -53,6 +70,7 @@ test('duplicate workers cannot claim or deliver one occurrence twice', function 
     $gateway = Mockery::mock(TelegramRichMessageGateway::class);
     $gateway->shouldReceive('send')->once()->andReturn(scalingTelegramMessage(501));
     $builder = Mockery::mock(AnalyticsDigestBuilder::class);
+    $builder->shouldReceive('prepare')->once()->andReturn(scalingDigestData());
     $builder->shouldReceive('build')->once()->andReturn(new InputRichMessage(blocks: []));
     $dispatcher = new TelegramNotificationDispatcher(
         $repository,
@@ -140,6 +158,80 @@ test('large due sets advance in stable bounded batches', function () {
         ->and(max($queryCounts))->toBeLessThanOrEqual(($batchSize * 4) + 20)
         ->and(max($memoryGrowth))->toBeLessThanOrEqual(16 * 1024 * 1024)
         ->and(TelegramNotificationDelivery::query()->count())->toBe(($batchSize * 3) + 2);
+});
+
+test('bounded mixed locale batch queries period trends once and generates one digest and chart per locale', function () {
+    // Arrange: four recipients span RU, EN, and one unsupported persisted value.
+    $now = CarbonImmutable::parse('2026-07-21 12:30:00', 'UTC');
+    CarbonImmutable::setTestNow($now);
+    $subscriptions = collect([
+        [901, 'ru'],
+        [902, 'en'],
+        [903, 'en'],
+        [904, 'ru'],
+    ])->map(fn (array $values): TelegramNotification => TelegramNotification::query()->create([
+        'instance_id' => $values[0],
+        'locale' => $values[1],
+        'enabled' => true,
+        'next_send_at' => $now,
+    ]));
+    DB::table('telegram_notifications')->where('instance_id', 904)->update(['locale' => 'EN']);
+
+    $trends = Mockery::mock(PeriodPlayerCountTrends::class);
+    $trends->shouldReceive('get')->once()->andReturn([
+        new PlayerCountTrendData('day', 100, 90, 10),
+    ]);
+    $charts = Mockery::mock(PlayerCountChartService::class);
+    $chartData = new PlayerCountChartData([], []);
+    $charts->shouldReceive('data')->once()->andReturn($chartData);
+    $charts->shouldReceive('generateFromData')->once()->with($chartData, 'ru')->andReturnNull();
+    $charts->shouldReceive('generateFromData')->once()->with($chartData, 'en')->andReturnNull();
+    $builder = new AnalyticsDigestBuilder(
+        $trends,
+        new AnalyticsRichMessageFactory,
+        $charts,
+        new AnalyticsChartMediaFactory,
+    );
+    $gateway = new class implements TelegramRichMessageGateway
+    {
+        /** @var array<int, InputRichMessage> */
+        public array $messages = [];
+
+        public function send(int $chatId, InputRichMessage $message, ?int $messageThreadId = null, ?InlineKeyboardMarkup $keyboard = null): Message
+        {
+            $this->messages[$chatId] = $message;
+
+            return scalingTelegramMessage($chatId);
+        }
+
+        public function updateMessage(InputRichMessage $message, ?InlineKeyboardMarkup $keyboard = null): Message|true
+        {
+            return true;
+        }
+    };
+    $repository = new TelegramNotificationSubscriptions;
+    $claims = $repository->claimDue($now, 4, 30);
+    $dispatcher = new TelegramNotificationDispatcher(
+        $repository,
+        $builder,
+        new TelegramNotificationSender($gateway),
+    );
+
+    // Act: deliver the complete bounded claim in one worker invocation.
+    $sent = $dispatcher->deliver($claims->modelKeys(), (string) $claims->firstOrFail()->claim_token);
+
+    // Assert: recipients share one generated object per locale and never across locales.
+    expect($sent)->toBe(4)
+        ->and($gateway->messages[901])->toBe($gateway->messages[904])
+        ->and($gateway->messages[902])->toBe($gateway->messages[903])
+        ->and($gateway->messages[901])->not->toBe($gateway->messages[902])
+        ->and($gateway->messages[901]->blocks[0]->text)->toBe('Pixel World · Статистика')
+        ->and($gateway->messages[902]->blocks[0]->text)->toBe('Pixel World · Statistics')
+        ->and($subscriptions->map->refresh()->every(
+            fn (TelegramNotification $subscription): bool => $subscription->last_sent_at?->equalTo($now) === true,
+        ))->toBeTrue();
+
+    CarbonImmutable::setTestNow();
 });
 
 test('stale claims recover but completed occurrences never recover', function () {

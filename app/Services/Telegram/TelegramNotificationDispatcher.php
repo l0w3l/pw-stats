@@ -9,6 +9,7 @@ use App\Jobs\SendTelegramNotificationBatch;
 use App\Models\TelegramNotificationDelivery;
 use App\Telegram\Messages\AnalyticsDigestBuilder;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 
 class TelegramNotificationDispatcher
@@ -81,12 +82,41 @@ class TelegramNotificationDispatcher
             return 0;
         }
 
-        // InputFile payloads stay inside this worker; no digest is serialized
-        // through the queue and one digest is shared by only this bounded job.
-        $digest = $this->digestBuilder->build();
+        try {
+            // Locale-independent period data is loaded once while InputFile
+            // payloads remain inside this bounded worker.
+            $digestData = $this->digestBuilder->prepare();
+        } catch (\Throwable) {
+            $this->failDigestPreparation($sendable, $claimToken, $now);
+
+            return 0;
+        }
+
+        $digests = [];
+        $deliveriesByLocale = $sendable->groupBy(
+            fn (TelegramNotificationDelivery $delivery): string => $this->normalizedLocale(
+                $delivery->notification->locale,
+            ),
+        );
+
+        foreach ($deliveriesByLocale as $locale => $localeDeliveries) {
+            try {
+                $digests[$locale] = $this->digestBuilder->build($locale, $digestData);
+            } catch (\Throwable) {
+                $this->failDigestPreparation($localeDeliveries, $claimToken, $now, $locale);
+            }
+        }
+
         $sent = 0;
 
         foreach ($sendable as $delivery) {
+            $locale = $this->normalizedLocale($delivery->notification->locale);
+            $digest = $digests[$locale] ?? null;
+
+            if ($digest === null) {
+                continue;
+            }
+
             $outcome = $this->sender->deliver($delivery->id, $delivery->notification, $digest);
             $outcomeAt = CarbonImmutable::now('UTC');
 
@@ -155,12 +185,55 @@ class TelegramNotificationDispatcher
         return $sent;
     }
 
+    /** @param Collection<int, TelegramNotificationDelivery> $deliveries */
+    private function failDigestPreparation(
+        Collection $deliveries,
+        string $claimToken,
+        CarbonImmutable $failedAt,
+        ?string $locale = null,
+    ): void {
+        foreach ($deliveries as $delivery) {
+            $transitioned = $delivery->attempt_count >= $this->maxAttempts()
+                ? $this->subscriptions->terminate(
+                    $delivery->id,
+                    $claimToken,
+                    $failedAt,
+                    TelegramNotificationDelivery::STATUS_EXHAUSTED,
+                    'attempts_exhausted',
+                    false,
+                )
+                : $this->subscriptions->retry(
+                    $delivery->id,
+                    $claimToken,
+                    $failedAt,
+                    $failedAt->addSeconds($this->backoffSeconds($delivery->attempt_count)),
+                    'digest_preparation_failed',
+                );
+
+            if (! $transitioned) {
+                Log::critical('Telegram digest preparation failure was not durably recorded.', [
+                    'delivery_id' => $delivery->id,
+                ]);
+            }
+        }
+
+        Log::error('Telegram digest preparation failed; durable delivery outcomes were recorded.', array_filter([
+            'delivery_count' => $deliveries->count(),
+            'locale' => $locale,
+        ], static fn (mixed $value): bool => $value !== null));
+    }
+
     private function claimTtlSeconds(): int
     {
         return max(
             (int) config('telegram_notifications.delivery.claim_ttl_seconds', 180),
             SendTelegramNotificationBatch::TIMEOUT + 30,
         );
+    }
+
+    private function normalizedLocale(?string $locale): string
+    {
+        return $locale === 'en' ? 'en' : 'ru';
     }
 
     private function maxAttempts(): int

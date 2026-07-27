@@ -16,6 +16,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int $instance_id
  * @property int|null $thread_id
  * @property string $context_key
+ * @property string $locale
  * @property string $send_time
  * @property bool $enabled
  * @property CarbonImmutable|null $next_send_at
@@ -25,6 +26,7 @@ class TelegramNotification extends Model
 {
     /** @var array<string, mixed> */
     protected $attributes = [
+        'locale' => 'ru',
         'send_time' => '00:00:00',
         'enabled' => false,
     ];
@@ -33,6 +35,7 @@ class TelegramNotification extends Model
     protected $fillable = [
         'instance_id',
         'thread_id',
+        'locale',
         'send_time',
         'enabled',
         'next_send_at',

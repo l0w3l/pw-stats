@@ -3,7 +3,12 @@
 use App\Models\PixelWorldLeaderboardPeriod;
 use App\Models\PixelWorldLeaderboardPeriodEntry;
 use App\Models\PixelWorldPlayer;
+use App\Models\PixelWorldPlayerTotal;
+use App\Queries\CurrentPlayerCountAnalytics;
 use App\Queries\LeaderboardAnalytics;
+use App\Queries\PeriodPlayerCountTrends;
+use App\Services\PixelWorld\Leaderboard\LeaderboardClient;
+use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 
@@ -80,6 +85,79 @@ test('day momentum uses matching players with positive deltas and applies determ
         ->not->toContain('unchanged', 'decreased', 'missing-current', 'missing-previous', 'foxtrot')
         ->and($entryQueries)->toHaveCount(1)
         ->and($entryQueries->first()['query'])->toContain('inner join', 'limit 5');
+});
+
+test('latest persisted player totals use the previous completed calendar period', function () {
+    $sampledAt = CarbonImmutable::parse('2026-07-22 12:35:00', 'UTC');
+
+    foreach ([
+        ['day', '2026-07-21', '2026-07-21', 100, 151],
+        ['week', '2026-07-13', '2026-07-19', 500, 720],
+        ['month', '2026-06-01', '2026-06-30', 1000, 1250],
+    ] as [$range, $start, $end, $previousTotal, $sampleTotal]) {
+        analyticsPeriod($range, $start, $end, $previousTotal, $sampledAt->subDay());
+        PixelWorldPlayerTotal::create([
+            'range' => $range,
+            'total' => $sampleTotal - 1,
+            'collected_at' => $sampledAt->subMinute(),
+        ]);
+        PixelWorldPlayerTotal::create([
+            'range' => $range,
+            'total' => $sampleTotal,
+            'collected_at' => $sampledAt,
+        ]);
+    }
+
+    analyticsPeriod('day', '2026-07-22', '2026-07-22', 140, $sampledAt);
+    analyticsPeriod('week', '2026-07-20', '2026-07-26', 700, $sampledAt);
+    analyticsPeriod('month', '2026-07-01', '2026-07-31', 1200, $sampledAt);
+    app()->instance(LeaderboardClient::class, Mockery::mock(LeaderboardClient::class));
+
+    $trends = collect((new CurrentPlayerCountAnalytics)->get())->keyBy('range');
+
+    expect($trends->keys()->all())->toBe(['day', 'week', 'month'])
+        ->and([$trends['day']->current, $trends['day']->previous, $trends['day']->delta])->toBe([151, 100, 51])
+        ->and([$trends['week']->current, $trends['week']->previous, $trends['week']->delta])->toBe([720, 500, 220])
+        ->and([$trends['month']->current, $trends['month']->previous, $trends['month']->delta])->toBe([1250, 1000, 250]);
+});
+
+test('per range fallback preserves period analytics when a player total sample is missing', function () {
+    $sampledAt = CarbonImmutable::parse('2026-07-22 12:35:00', 'UTC');
+    analyticsPeriod('day', '2026-07-21', '2026-07-21', 100, $sampledAt->subDay());
+    analyticsPeriod('day', '2026-07-22', '2026-07-22', 110, $sampledAt);
+    analyticsPeriod('week', '2026-07-13', '2026-07-19', 500, $sampledAt->subWeek());
+    analyticsPeriod('week', '2026-07-20', '2026-07-26', 550, $sampledAt);
+    analyticsPeriod('month', '2026-07-01', '2026-07-31', 1000, $sampledAt);
+    PixelWorldPlayerTotal::create([
+        'range' => 'day',
+        'total' => 125,
+        'collected_at' => $sampledAt,
+    ]);
+
+    $trends = collect((new CurrentPlayerCountAnalytics)->get())->keyBy('range');
+
+    expect([$trends['day']->current, $trends['day']->previous, $trends['day']->delta])->toBe([125, 100, 25])
+        ->and([$trends['week']->current, $trends['week']->previous, $trends['week']->delta])->toBe([550, 500, 50])
+        ->and([$trends['month']->current, $trends['month']->previous, $trends['month']->delta])->toBe([1000, null, null]);
+});
+
+test('persisted player total query is deterministic when data is absent', function () {
+    expect((new CurrentPlayerCountAnalytics)->get())->toBe([]);
+});
+
+test('scheduled player count trends use leaderboard periods instead of minute totals', function () {
+    $collectedAt = CarbonImmutable::parse('2026-07-22 12:35:00', 'UTC');
+    analyticsPeriod('day', '2026-07-21', '2026-07-21', 100, $collectedAt->subDay());
+    analyticsPeriod('day', '2026-07-22', '2026-07-22', 110, $collectedAt);
+    PixelWorldPlayerTotal::create([
+        'range' => 'day',
+        'total' => 999,
+        'collected_at' => $collectedAt,
+    ]);
+
+    $day = collect((new PeriodPlayerCountTrends)->get())->firstWhere('range', 'day');
+
+    expect([$day->current, $day->previous, $day->delta])->toBe([110, 100, 10]);
 });
 
 function analyticsPeriod(

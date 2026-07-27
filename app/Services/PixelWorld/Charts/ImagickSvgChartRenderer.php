@@ -6,18 +6,21 @@ namespace App\Services\PixelWorld\Charts;
 
 use App\Data\PixelWorld\Analytics\PlayerCountChartData;
 use App\Data\PixelWorld\Analytics\PlayerCountChartSeries;
+use App\Telegram\Messages\TelegramTranslations;
 use Imagick;
 use ImagickPixel;
 use RuntimeException;
 
 class ImagickSvgChartRenderer implements ChartRenderer
 {
+    public function __construct(private readonly TelegramTranslations $translations) {}
+
     public function version(): string
     {
-        return 'imagick-svg-v1';
+        return 'imagick-svg-v2';
     }
 
-    public function render(PlayerCountChartData $data, int $width, int $height): string
+    public function render(PlayerCountChartData $data, int $width, int $height, string $locale): string
     {
         if (! extension_loaded('imagick')) {
             throw new RuntimeException('The Imagick extension is required to render analytics charts.');
@@ -29,7 +32,7 @@ class ImagickSvgChartRenderer implements ChartRenderer
         $image->setBackgroundColor(new ImagickPixel('#ffffff'));
         $image->setResolution(96, 96);
         $image->setSize($width, $height);
-        $image->readImageBlob($this->svg($data, $width, $height));
+        $image->readImageBlob($this->svg($data, $width, $height, $locale));
         $image->setImageBackgroundColor(new ImagickPixel('#ffffff'));
         $image->setImageAlphaChannel(Imagick::ALPHACHANNEL_REMOVE);
         $image = $image->mergeImageLayers(Imagick::LAYERMETHOD_FLATTEN);
@@ -59,24 +62,26 @@ class ImagickSvgChartRenderer implements ChartRenderer
         }
     }
 
-    private function svg(PlayerCountChartData $data, int $width, int $height): string
+    private function svg(PlayerCountChartData $data, int $width, int $height, string $locale): string
     {
+        $locale = $this->translations->locale($locale);
         $panelGap = 14;
         $outer = 28;
         $titleHeight = 48;
         $panelHeight = ($height - $outer * 2 - $titleHeight - $panelGap * 2) / 3;
         $parts = [sprintf(
-            '<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d"><rect width="100%%" height="100%%" fill="#f8fafc"/><style>text{font-family:Arial,sans-serif;fill:#334155}.title{font-size:25px;font-weight:700}.label{font-size:15px;font-weight:700}.axis{font-size:12px;fill:#64748b}</style><text x="%d" y="38" class="title">История числа игроков по календарным периодам</text>',
+            '<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d"><rect width="100%%" height="100%%" fill="#f8fafc"/><style>text{font-family:Arial,sans-serif;fill:#334155}.title{font-size:25px;font-weight:700}.label{font-size:15px;font-weight:700}.axis{font-size:12px;fill:#64748b}</style><text x="%d" y="38" class="title">%s</text>',
             $width,
             $height,
             $width,
             $height,
             $outer,
+            $this->escape($this->translations->get('telegram.chart.title', $locale)),
         )];
 
         foreach ($data->series as $index => $series) {
             $y = $outer + $titleHeight + $index * ($panelHeight + $panelGap);
-            $parts[] = $this->panel($series, $outer, $y, $width - $outer * 2, $panelHeight);
+            $parts[] = $this->panel($series, $outer, $y, $width - $outer * 2, $panelHeight, $locale);
         }
 
         $parts[] = '</svg>';
@@ -84,13 +89,18 @@ class ImagickSvgChartRenderer implements ChartRenderer
         return implode('', $parts);
     }
 
-    private function panel(PlayerCountChartSeries $series, float $x, float $y, float $width, float $height): string
+    private function panel(PlayerCountChartSeries $series, float $x, float $y, float $width, float $height, string $locale): string
     {
-        $label = $this->escape(strtoupper($series->range));
+        $label = $this->escape($this->translations->get("telegram.periods.{$series->range}", $locale));
         $parts = [sprintf('<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" rx="10" fill="#fff" stroke="#e2e8f0"/><text x="%.1f" y="%.1f" class="label">%s</text>', $x, $y, $width, $height, $x + 16, $y + 25, $label)];
 
         if ($series->points === []) {
-            return implode('', $parts).sprintf('<text x="%.1f" y="%.1f" class="axis">Нет данных</text>', $x + 70, $y + 25);
+            return implode('', $parts).sprintf(
+                '<text x="%.1f" y="%.1f" class="axis">%s</text>',
+                $x + 70,
+                $y + 25,
+                $this->escape($this->translations->get('telegram.chart.no_data', $locale)),
+            );
         }
 
         $plotX = $x + 105;

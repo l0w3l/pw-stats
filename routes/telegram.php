@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Telegram\Handlers\NotificationLocaleCallbackHandler;
 use App\Telegram\Handlers\NotificationRefreshCallbackHandler;
 use App\Telegram\Handlers\NotificationSwitchCommandHandler;
 use App\Telegram\Handlers\NotificationToggleCallbackHandler;
@@ -25,4 +26,9 @@ Telepath::onCallbackQuery(
 Telepath::onCallbackQuery(
     [NotificationRefreshCallbackHandler::class, 'handle'],
     '^'.preg_quote(SettingsRichMessageFactory::CALLBACK_REFRESH, '/').'\d+$'
+)->middleware(AnswerCallbackQueryMiddleware::class);
+
+Telepath::onCallbackQuery(
+    [NotificationLocaleCallbackHandler::class, 'handle'],
+    '^'.preg_quote(SettingsRichMessageFactory::CALLBACK_LOCALE, '/').'(?:ru|en):\d+$'
 )->middleware(AnswerCallbackQueryMiddleware::class);

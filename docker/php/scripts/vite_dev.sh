@@ -1,9 +1,7 @@
 #!/bin/bash
-set -euo pipefail
 
-export HOME=/var/www
-export NVM_DIR="$HOME/.nvm"
-# shellcheck disable=SC1091
-source "$NVM_DIR/nvm.sh"
-cd /var/www/html
-exec npm run dev -- --host 0.0.0.0
+scripts_folder=/usr/local/bin/scripts
+
+bash "$scripts_folder"/wait_setup.sh
+
+bash "$scripts_folder"/processes/run_dev_vite.sh

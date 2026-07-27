@@ -1,118 +1,128 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+set -e
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+export HOST_UID=$(id -u)
+export HOST_GID=$(id -g)
 
-if [[ ! -f .env ]]; then
-    printf 'Missing %s/.env; copy docker/.env.example and configure it first.\n' "$SCRIPT_DIR" >&2
+# Change to the script's directory
+cd "$(dirname "$0")"
+
+# Load .env
+if [ -f .env ]; then
+    set -a
+    source <(grep -v '^#' .env | sed '/^$/d')
+    set +a
+else
+    echo ".env not found"
     exit 1
 fi
 
-# Read one literal dotenv value without evaluating the file as shell code.
-dotenv_value() {
-    local file=$1 wanted=$2 line key value
-    while IFS= read -r line || [[ -n $line ]]; do
-        line=${line%$'\r'}
-        [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
-        line=${line#export }
-        key=${line%%=*}
-        key=${key//[[:space:]]/}
-        [[ $key == "$wanted" ]] || continue
-        value=${line#*=}
-        value="${value#"${value%%[![:space:]]*}"}"
-        value="${value%"${value##*[![:space:]]}"}"
-        if [[ ${#value} -ge 2 && (( ${value:0:1} == '"' && ${value: -1} == '"' ) || ( ${value:0:1} == "'" && ${value: -1} == "'" )) ]]; then
-            value=${value:1:${#value}-2}
-        fi
-        printf '%s' "$value"
-        return 0
-    done < "$file"
-    return 1
-}
-
-export HOST_UID="$(id -u)"
-export HOST_GID="$(id -g)"
-
-ENVIRONMENT=dev
-if [[ ${1:-} == dev || ${1:-} == prod ]]; then
-    ENVIRONMENT=$1
+# Determine environment (dev by default)
+ENV="dev"
+if [[ "$1" == "prod" ]]; then
+    ENV="prod"
+    shift
+elif [[ "$1" == "dev" ]]; then
+    ENV="dev"
     shift
 fi
 
-STORAGE_APP="$(dotenv_value .env STORAGE_APP || true)"
-STORAGE_NGINX="$(dotenv_value .env STORAGE_NGINX || true)"
-STORAGE_FPM="$(dotenv_value .env STORAGE_FPM || true)"
-STORAGE_POSTGRES="$(dotenv_value .env STORAGE_POSTGRES || true)"
-for required_name in STORAGE_APP STORAGE_NGINX STORAGE_FPM STORAGE_POSTGRES; do
-    if [[ -z ${!required_name} ]]; then
-        printf '%s must be set to a literal path in docker/.env.\n' "$required_name" >&2
-        exit 1
+COMPOSE_FILES="-f docker-compose.yml"
+if [ -f "docker-compose.$ENV.yml" ]; then
+    COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.$ENV.yml"
+fi
+ENV_FILES="--env-file .env"
+
+# Add application .env if it exists
+APP_ENV_FILE="${STORAGE_APP}/.env"
+PROJECT_NAME="monya52" # Default fallback
+
+if [ -f "$APP_ENV_FILE" ]; then
+    ENV_FILES="$ENV_FILES --env-file $APP_ENV_FILE"
+    # Extract APP_NAME and sanitize it for docker project name
+    EXTRACTED_NAME=$(grep '^APP_NAME=' "$APP_ENV_FILE" | cut -d '=' -f2- | tr -d '"' | tr -d "'" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')
+    if [ -n "$EXTRACTED_NAME" ]; then
+        PROJECT_NAME="$EXTRACTED_NAME"
     fi
-done
-
-APP_ENV_FILE="$STORAGE_APP/.env"
-if [[ ! -f $APP_ENV_FILE ]]; then
-    printf 'Missing application environment file %s. Copy .env.example there and set APP_KEY.\n' "$APP_ENV_FILE" >&2
-    exit 1
 fi
 
-APP_NAME="$(dotenv_value "$APP_ENV_FILE" APP_NAME || true)"
-PROJECT_NAME="$(printf '%s' "${APP_NAME:-$(basename "$STORAGE_APP")}" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-')"
-PROJECT_NAME=${PROJECT_NAME#-}
-PROJECT_NAME=${PROJECT_NAME%-}
-PROJECT_NAME=${PROJECT_NAME:-pixel-world-stats}
+COMPOSE_BASE="docker compose -p $PROJECT_NAME $ENV_FILES $COMPOSE_FILES"
 
-compose=(docker compose -p "$PROJECT_NAME" --env-file .env --env-file "$APP_ENV_FILE" -f docker-compose.yml)
-if [[ -f docker-compose.$ENVIRONMENT.yml ]]; then
-    compose+=(-f "docker-compose.$ENVIRONMENT.yml")
-fi
-
+# Helper for initializing storage and logs
 init_storage() {
-    local dir file
-    printf 'Initializing Docker storage for %s (project: %s)...\n' "$ENVIRONMENT" "$PROJECT_NAME"
-    for dir in "$STORAGE_NGINX" "$STORAGE_FPM" "$STORAGE_POSTGRES"; do
+    echo "Initializing storage and logs for $ENV (Project: $PROJECT_NAME)..."
+
+    DIRS=("$STORAGE_NGINX" "$STORAGE_FPM")
+    for dir in "${DIRS[@]}"; do
         mkdir -p "$dir"
     done
-    for file in \
-        "$STORAGE_FPM/logs/fpm-php.www.log" \
-        "$STORAGE_NGINX/logs/access.log" \
-        "$STORAGE_NGINX/logs/error.log"; do
+
+    LOG_FILES=(
+        "$STORAGE_FPM/logs/fpm-php.www.log"
+        "$STORAGE_NGINX/logs/access.log"
+        "$STORAGE_NGINX/logs/error.log"
+    )
+
+    for file in "${LOG_FILES[@]}"; do
         mkdir -p "$(dirname "$file")"
         touch "$file"
         chmod 664 "$file"
     done
 }
 
-command=${1:-}
-[[ -n $command ]] && shift || true
-case "$command" in
+case "$1" in
     up|start)
         init_storage
-        "${compose[@]}" up -d "$@"
+        shift
+        $COMPOSE_BASE up -d "$@"
         ;;
-    down|stop) "${compose[@]}" down "$@" ;;
-    restart) "${compose[@]}" restart "$@" ;;
-    build) "${compose[@]}" build "$@" ;;
-    logs) "${compose[@]}" logs "$@" ;;
-    exec) "${compose[@]}" exec "$@" ;;
-    artisan) "${compose[@]}" exec fpm php artisan "$@" ;;
-    composer) "${compose[@]}" exec fpm composer "$@" ;;
-    tinker) "${compose[@]}" exec fpm php artisan tinker "$@" ;;
-    test) "${compose[@]}" exec fpm php artisan test "$@" ;;
+    down|stop)
+        shift
+        $COMPOSE_BASE down "$@"
+        ;;
+    restart)
+        shift
+        $COMPOSE_BASE restart "$@"
+        ;;
+    build)
+        shift
+        $COMPOSE_BASE build "$@"
+        ;;
+    logs)
+        shift
+        $COMPOSE_BASE logs "$@"
+        ;;
+    exec)
+        shift
+        $COMPOSE_BASE exec -it -u root "$@"
+        ;;
+    artisan)
+        shift
+        $COMPOSE_BASE exec -it -u root fpm php artisan "$@"
+        ;;
+    composer)
+        shift
+        $COMPOSE_BASE exec -it -u root app fpm composer "$@"
+        ;;
+    tinker)
+        $COMPOSE_BASE exec -it -u root fpm php artisan tinker
+        ;;
+    test)
+        shift
+        $COMPOSE_BASE exec -it -u root fpm php artisan test "$@"
+        ;;
     npm)
-        if [[ $ENVIRONMENT == dev ]]; then
-            npm_service=vite
-        else
-            npm_service=fpm
+        shift
+        $COMPOSE_BASE exec -it -u root vite npm "$@"
+        ;;
+    status)
+        $COMPOSE_BASE ps
+        ;;
+    *)
+        if [ -z "$1" ]; then
+            echo "Usage: ./dc [dev|prod] [up|down|restart|build|logs|exec|artisan|composer|tinker|test|npm|status]"
+            exit 1
         fi
-        "${compose[@]}" exec "$npm_service" bash -lc \
-            'export NVM_DIR=/var/www/.nvm; source "$NVM_DIR/nvm.sh"; exec npm "$@"' bash "$@"
+        $COMPOSE_BASE "$@"
         ;;
-    status) "${compose[@]}" ps "$@" ;;
-    '')
-        printf 'Usage: ./dc [dev|prod] [up|down|restart|build|logs|exec|artisan|composer|tinker|test|npm|status]\n' >&2
-        exit 1
-        ;;
-    *) "${compose[@]}" "$command" "$@" ;;
 esac

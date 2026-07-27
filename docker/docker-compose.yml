@@ -1,218 +1,121 @@
-x-php-build: &php-build
-    context: ./php
-    args:
-        APP_XDEBUG: "false"
-
-x-app-environment: &app-environment
-    APP_VITE_DEV: "false"
-    DB_CONNECTION: pgsql
-    DB_HOST: postgres
-    DB_PORT: "5432"
-    DB_DATABASE: "${POSTGRES_DB:?POSTGRES_DB is required}"
-    DB_USERNAME: "${POSTGRES_USER:?POSTGRES_USER is required}"
-    DB_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
-    REDIS_HOST: redis
-    REDIS_PORT: "6379"
-    ACCESS_TOKEN_BASE_URI: http://access-token:8000/
-
-x-app-depends: &app-depends
-    setup:
-        condition: service_completed_successfully
-    postgres:
-        condition: service_healthy
-    redis:
-        condition: service_healthy
-    access-token:
-        condition: service_healthy
-
 services:
     nginx:
         build: ./nginx
         ports:
-            - "${APP_NGINX_HTTP:-80}:80"
+            - "${NGINX_HTTP:-80}:80"
         networks:
-            - edge
-        depends_on:
-            fpm:
-                condition: service_started
+            - backend
         restart: unless-stopped
-        read_only: true
-        tmpfs:
-            - /run:size=1m
-            - /var/cache/nginx:size=16m
-        security_opt:
-            - no-new-privileges:true
-        cap_drop:
-            - ALL
-        cap_add:
-            - CHOWN
-            - DAC_OVERRIDE
-            - NET_BIND_SERVICE
-            - SETGID
-            - SETUID
         volumes:
-            - "${STORAGE_APP:?STORAGE_APP is required}:/var/www/html:ro"
-            - "${STORAGE_NGINX:?STORAGE_NGINX is required}/logs/:/var/log/nginx/"
+            - "${STORAGE_APP}:/var/www/html"
+            - "${STORAGE_NGINX}/logs/:/var/log/nginx/"
             - ./nginx/config/nginx.conf:/etc/nginx/nginx.conf:ro
-            - ./nginx/config/sites-available/:/etc/nginx/sites-available/:ro
-            - ./nginx/config/sites-enabled/:/etc/nginx/sites-enabled/:ro
-            - ./nginx/config/nginxconfig.io/:/etc/nginx/nginxconfig.io/:ro
+            - ./nginx/config/sites-available/:/etc/nginx/sites-available/
+            - ./nginx/config/sites-enabled/:/etc/nginx/sites-enabled/
+            - ./nginx/config/nginxconfig.io/:/etc/nginx/nginxconfig.io/
 
     fpm:
-        build: *php-build
-        user: "${HOST_UID:?HOST_UID is required}:${HOST_GID:?HOST_GID is required}"
-        environment: *app-environment
+        build:
+            context: ./php
+        user: "${HOST_UID}:${HOST_GID}"
         networks:
-            - edge
-            - data
-            - sidecar_private
-            - app_outbound
-        depends_on: *app-depends
+            - backend
         volumes:
             - "${STORAGE_APP}:/var/www/html"
         restart: unless-stopped
 
     postgres:
-        image: postgres:18-alpine
+        image: postgres:18
         restart: unless-stopped
+        user: "${HOST_UID}:${HOST_GID}"
+
         environment:
             POSTGRES_USER: "${POSTGRES_USER}"
             POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
             POSTGRES_DB: "${POSTGRES_DB}"
-        networks:
-            - data
-        volumes:
-            - "${STORAGE_POSTGRES:?STORAGE_POSTGRES is required}:/var/lib/postgresql"
-            - ./postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
-        command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
-        healthcheck:
-            test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
-            interval: 5s
-            timeout: 5s
-            retries: 20
-            start_period: 10s
 
-    redis:
-        image: redis:7.4-alpine
-        restart: unless-stopped
         networks:
-            - data
-        command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
-        healthcheck:
-            test: ["CMD", "redis-cli", "ping"]
-            interval: 5s
-            timeout: 3s
-            retries: 20
+            - backend
+
+        volumes:
+            - "${STORAGE_POSTGRES}:/var/lib/postgresql"
+            - ./postgres/postgresql.conf:/etc/postgresql/postgresql.conf
+
+        command: >
+            postgres
+            -c config_file=/etc/postgresql/postgresql.conf
 
     setup:
-        build: *php-build
+        build:
+            context: ./php
         user: "${HOST_UID}:${HOST_GID}"
-        environment: *app-environment
         networks:
-            - data
-            - sidecar_private
-            - app_outbound
-        depends_on:
-            postgres:
-                condition: service_healthy
-            redis:
-                condition: service_healthy
+            - backend
         restart: "no"
         entrypoint: ["bash", "/usr/local/bin/scripts/setup.sh"]
         volumes:
             - "${STORAGE_APP}:/var/www/html"
 
     scheduler:
-        build: *php-build
+        build:
+            context: ./php
         user: "${HOST_UID}:${HOST_GID}"
-        environment: *app-environment
         networks:
-            - data
-            - sidecar_private
-            - app_outbound
-        depends_on: *app-depends
-        restart: unless-stopped
-        entrypoint: ["bash", "/usr/local/bin/scripts/laravel_scheduler.sh"]
+            - backend
+        restart: always
+        entrypoint: [ "bash", "/usr/local/bin/scripts/laravel_scheduler.sh" ]
         volumes:
             - "${STORAGE_APP}:/var/www/html"
 
     queue:
-        build: *php-build
+        build:
+            context: ./php
         user: "${HOST_UID}:${HOST_GID}"
-        environment: *app-environment
         logging:
             options:
                 max-size: "10m"
                 max-file: "3"
         networks:
-            - data
-            - sidecar_private
-            - app_outbound
-        depends_on: *app-depends
-        restart: unless-stopped
-        entrypoint: ["bash", "/usr/local/bin/scripts/laravel_queue.sh"]
+            - backend
+        restart: always
+        entrypoint: [ "bash", "/usr/local/bin/scripts/laravel_queue.sh" ]
         volumes:
             - "${STORAGE_APP}:/var/www/html"
 
+
     flaresolverr:
-        image: ghcr.io/flaresolverr/flaresolverr:v3.4.1
+        # DockerHub mirror flaresolverr/flaresolverr:latest
+        image: ghcr.io/flaresolverr/flaresolverr:latest
         environment:
-            LOG_LEVEL: "${LOG_LEVEL:-info}"
-            LOG_FILE: "${LOG_FILE:-none}"
-            LOG_HTML: "${LOG_HTML:-false}"
-            CAPTCHA_SOLVER: "${CAPTCHA_SOLVER:-none}"
-            TZ: Europe/London
+            - LOG_LEVEL=${LOG_LEVEL:-info}
+            - LOG_FILE=${LOG_FILE:-none}
+            - LOG_HTML=${LOG_HTML:-false}
+            - CAPTCHA_SOLVER=${CAPTCHA_SOLVER:-none}
+            - TZ=Europe/London
         volumes:
             - /var/lib/flaresolver:/config
         networks:
-            - data
-            - app_outbound
+            - backend
         restart: unless-stopped
 
     access-token:
+        env_file:
+            - .env
         build: ./access_token
         restart: unless-stopped
-        environment:
-            TELEGRAM_API_ID: "${TELEGRAM_API_ID:?TELEGRAM_API_ID is required}"
-            TELEGRAM_API_HASH: "${TELEGRAM_API_HASH:?TELEGRAM_API_HASH is required}"
-            TELEGRAM_PHONE: "${TELEGRAM_PHONE:-}"
-            TELEGRAM_PASSWORD: "${TELEGRAM_PASSWORD:-}"
-            TELEGRAM_SESSION_NAME: session_data/session_name
-            PIXEL_WORLD_BOT_USERNAME_ALLOWLIST: "${PIXEL_WORLD_BOT_USERNAME_ALLOWLIST:?PIXEL_WORLD_BOT_USERNAME_ALLOWLIST is required}"
         networks:
-            - sidecar_private
-            - sidecar_egress
+            - backend
         volumes:
             - telegram_session:/app/session_data
-        read_only: true
-        tmpfs:
-            - /tmp:size=16m,mode=1777
-        security_opt:
-            - no-new-privileges:true
-        cap_drop:
-            - ALL
-        pids_limit: 64
-        mem_limit: 256m
-        cpus: 1.0
-        healthcheck:
-            test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('127.0.0.1',8000),2); s.close()"]
-            interval: 10s
-            timeout: 3s
-            retries: 12
-            start_period: 15s
+    redis:
+        image: redis:7-alpine
+        restart: unless-stopped
+        networks:
+            - backend
+
 
 networks:
-    edge:
-        driver: bridge
-    data:
-        driver: bridge
-        internal: true
-    sidecar_private:
-        driver: bridge
-        internal: true
-    app_outbound:
-        driver: bridge
-    sidecar_egress:
+    backend:
         driver: bridge
 
 volumes:

@@ -8,6 +8,8 @@ log() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1"
 }
 
+rm -f /var/www/html/.setup_done
+
 scripts_folder=/usr/local/bin/scripts
 
 log "Starting setup..."
@@ -18,12 +20,10 @@ if [ -f "composer.json" ]; then
     bash "$scripts_folder"/setups/composer.sh
 fi
 
-# NPM dependencies are always installed. Development skips only the production
-# build because the dev Compose overlay starts a real Vite process.
+# NPM / Build (only if package.json exists)
 if [ -f "package.json" ]; then
     if [ "$APP_VITE_DEV" = "true" ]; then
-        log "Installing npm dependencies for Vite development..."
-        bash "$scripts_folder"/setups/npm.sh --install-only
+        log "Dev mode detected, skipping heavy npm build (vite will handle it)"
     else
         log "Installing npm dependencies and building assets..."
         bash "$scripts_folder"/setups/npm.sh
@@ -39,4 +39,5 @@ php artisan config:cache
 php artisan route:cache
 php artisan view:cache
 
+touch /var/www/html/.setup_done
 log "Setup completed successfully."

@@ -753,9 +753,9 @@ test('start renders persisted minute totals and points thresholds without upstre
         ->and([$playerRows[1][1]->text, $playerRows[1][2]->text])->toBe(['151', '+51'])
         ->and([$playerRows[2][1]->text, $playerRows[2][2]->text])->toBe(['550', '+50'])
         ->and([$playerRows[3][1]->text, $playerRows[3][2]->text])->toBe(['1 250', '+250'])
-        ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[1]))->toBe(['50+', '3', '2', '1'])
+        ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[1]))->toBe(['250+', '1', '0', '1'])
         ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[2]))->toBe(['100+', '2', '1', '1'])
-        ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[3]))->toBe(['250+', '1', '0', '1'])
+        ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[3]))->toBe(['50+', '3', '2', '1'])
         ->and(collect($sent->blocks)->contains(fn ($block): bool => $block instanceof InputRichBlockPhoto))->toBeFalse();
 });
 
@@ -875,7 +875,7 @@ test('start with missing thresholds sends localized chartless settings', functio
     $thresholdRows = $sent->blocks[2]->cells;
     expect($shown?->locale)->toBe('en')
         ->and($sent->blocks)->toHaveCount(3)
-        ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[1]))->toBe(['50+', '—', '—', '—'])
+        ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[1]))->toBe(['250+', '—', '—', '—'])
         ->and(collect($sent->blocks)->contains(fn ($block): bool => $block instanceof InputRichBlockPhoto))->toBeFalse();
 });
 
@@ -1076,9 +1076,9 @@ test('scheduled digest prepares period trends and points thresholds and renders 
         ->and($playerRows)->toHaveCount(4)
         ->and(array_map(fn ($cell) => $cell->text, $playerRows[1]))->toBe(['День', '100', '+10'])
         ->and($thresholdRows)->toHaveCount(4)
-        ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[1]))->toBe(['50+', '30', '60', '90'])
+        ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[1]))->toBe(['250+', '10', '20', '30'])
         ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[2]))->toBe(['100+', '20', '40', '60'])
-        ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[3]))->toBe(['250+', '10', '20', '30'])
+        ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[3]))->toBe(['50+', '30', '60', '90'])
         ->and(collect($russian->blocks)->contains(fn ($block): bool => $block instanceof InputRichBlockPhoto))->toBeFalse();
 });
 

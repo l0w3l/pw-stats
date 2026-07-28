@@ -69,9 +69,9 @@ function expectedPointsTable(string $locale): array
 {
     return [
         [$locale === 'en' ? 'Points' : 'Очки', 'DAY', 'WEEK', 'MONTH'],
-        ['50+', '9', '—', '30'],
-        ['100+', '4', '—', '20'],
         ['250+', '0', '—', '10'],
+        ['100+', '4', '—', '20'],
+        ['50+', '9', '—', '30'],
     ];
 }
 

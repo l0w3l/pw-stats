@@ -99,7 +99,7 @@ class SettingsRichMessageFactory
             'MONTH',
         ])];
 
-        foreach ([50, 100, 250] as $minimumPoints) {
+        foreach ([250, 100, 50] as $minimumPoints) {
             $rows[] = [
                 $this->cell("{$minimumPoints}+"),
                 ...array_map(

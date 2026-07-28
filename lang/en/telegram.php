@@ -32,8 +32,9 @@ return [
         'week' => 'Weekly',
         'month' => 'Monthly',
     ],
-    'monthly_kills' => 'Kills this month: :kills (≈:average_kills kills per player or :time in game)',
+    'monthly_kills' => 'Kills this month: :kills (≈:average_kills kills per player)',
     'monthly_kills_without_average' => 'Kills this month: :kills',
+    'monthly_players' => 'Players this month: :players (≈:time in game)',
     'duration' => [
         'days' => 'd',
         'hours' => 'h',

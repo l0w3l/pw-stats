@@ -43,7 +43,14 @@ final readonly class TelegramTranslations
         return $this->get('telegram.monthly_kills', $locale, [
             'kills' => number_format($kills, 0, '.', ' '),
             'average_kills' => number_format($averageKills, 0, '.', ' '),
-            'time' => $this->formatPlayTime($averageKills * 4, $this->locale($locale)),
+        ]);
+    }
+
+    public function monthlyPlayers(int $kills, int $players, ?string $locale): string
+    {
+        return $this->get('telegram.monthly_players', $locale, [
+            'players' => number_format($players, 0, '.', ' '),
+            'time' => $this->formatPlayTime((int) round(($kills * 4) / $players), $this->locale($locale)),
         ]);
     }
 

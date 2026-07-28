@@ -65,11 +65,17 @@ class SettingsRichMessageFactory
             );
         }
         if ($monthlyKills !== null) {
+            $monthlyPlayers = $this->trend($analytics, 'month')?->current;
             $blocks[] = new InputRichBlockParagraph($this->translations->monthlyKills(
                 $monthlyKills,
-                $this->trend($analytics, 'month')?->current,
+                $monthlyPlayers,
                 $locale,
             ));
+            if ($monthlyPlayers !== null && $monthlyPlayers > 0) {
+                $blocks[] = new InputRichBlockParagraph(
+                    $this->translations->monthlyPlayers($monthlyKills, $monthlyPlayers, $locale),
+                );
+            }
         }
 
         return new SettingsView(

@@ -33,10 +33,12 @@ test('scheduled digest contains totals and points thresholds without a graph', f
         fn ($block): bool => $block instanceof InputRichBlockTable,
     );
 
-    expect($message->blocks)->toHaveCount(4)
+    expect($message->blocks)->toHaveCount(5)
         ->and($tables)->toHaveCount(2)
         ->and(json_encode($message->toRequestArray(), JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE))
-        ->toContain('Убийств за месяц: 366 (≈31 на игрока или 2 мин 4 сек в игре)')
+        ->toContain('Убийств за месяц: 366 (≈31 на игрока)')
+        ->and(json_encode($message->toRequestArray(), JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE))
+        ->toContain('Игроков за месяц: 12 (≈2 мин 2 сек в игре)')
         ->and(collect($message->blocks)->contains(
             fn ($block): bool => $block instanceof InputRichBlockPhoto,
         ))->toBeFalse();

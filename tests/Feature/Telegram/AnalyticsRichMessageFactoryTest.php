@@ -96,11 +96,12 @@ test('digest renders exact localized player and points tables without a photo', 
         ->values();
 
     // Assert: totals stay unchanged, threshold orientation is exact, and no graph is emitted.
-    expect($message->blocks)->toHaveCount(4)
+    expect($message->blocks)->toHaveCount(5)
         ->and(array_map(fn (object $block): string => $block::class, $message->blocks))->toBe([
             InputRichBlockSectionHeading::class,
             InputRichBlockTable::class,
             InputRichBlockTable::class,
+            InputRichBlockParagraph::class,
             InputRichBlockParagraph::class,
         ])
         ->and($tables->pluck('caption')->all())->toBe(expectedTableTitles($locale))
@@ -109,8 +110,11 @@ test('digest renders exact localized player and points tables without a photo', 
         ->and(collect($message->blocks)->contains(fn ($block): bool => $block instanceof InputRichBlockPhoto))->toBeFalse()
         ->and($payload)->toContain($heading)
         ->and($payload)->toContain($locale === 'en'
-            ? 'Kills this month: 9 010 (≈30 kills per player or 2 min in game)'
-            : 'Убийств за месяц: 9 010 (≈30 на игрока или 2 мин в игре)')
+            ? 'Kills this month: 9 010 (≈30 kills per player)'
+            : 'Убийств за месяц: 9 010 (≈30 на игрока)')
+        ->and($payload)->toContain($locale === 'en'
+            ? 'Players this month: 305 (≈1 min 58 sec in game)'
+            : 'Игроков за месяц: 305 (≈1 мин 58 сек в игре)')
         ->and($payload)->not->toContain('Slayer')
         ->and($payload)->not->toContain('16.07.2026')
         ->and($payload)->not->toContain('momentum')
@@ -213,11 +217,12 @@ test('settings contains only localized statistics and exact RU and EN controls',
         ->values();
 
     // Assert: exact totals and thresholds precede the unchanged necessary controls, without a graph.
-    expect($view->message->blocks)->toHaveCount(4)
+    expect($view->message->blocks)->toHaveCount(5)
         ->and(array_map(fn (object $block): string => $block::class, $view->message->blocks))->toBe([
             InputRichBlockSectionHeading::class,
             InputRichBlockTable::class,
             InputRichBlockTable::class,
+            InputRichBlockParagraph::class,
             InputRichBlockParagraph::class,
         ])
         ->and($tables->pluck('caption')->all())->toBe(expectedTableTitles($locale))
@@ -226,8 +231,11 @@ test('settings contains only localized statistics and exact RU and EN controls',
         ->and(collect($view->message->blocks)->contains(fn ($block): bool => $block instanceof InputRichBlockPhoto))->toBeFalse()
         ->and($payload)->toContain($heading)
         ->and($payload)->toContain($locale === 'en'
-            ? 'Kills this month: 9 010 (≈30 kills per player or 2 min in game)'
-            : 'Убийств за месяц: 9 010 (≈30 на игрока или 2 мин в игре)')
+            ? 'Kills this month: 9 010 (≈30 kills per player)'
+            : 'Убийств за месяц: 9 010 (≈30 на игрока)')
+        ->and($payload)->toContain($locale === 'en'
+            ? 'Players this month: 305 (≈1 min 58 sec in game)'
+            : 'Игроков за месяц: 305 (≈1 мин 58 сек в игре)')
         ->and($payload)->not->toContain('Slayer')
         ->and($payload)->not->toContain('2026', '12:30', '14:30', 'momentum')
         ->and(array_column($keyboard[1], 'text'))->toBe(['RU', 'EN'])

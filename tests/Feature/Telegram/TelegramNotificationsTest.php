@@ -807,14 +807,15 @@ test('start renders persisted minute totals and points thresholds without upstre
 
     $playerRows = $sent->blocks[1]->cells;
     $thresholdRows = $sent->blocks[2]->cells;
-    expect($sent->blocks)->toHaveCount(4)
+    expect($sent->blocks)->toHaveCount(5)
         ->and([$playerRows[1][1]->text, $playerRows[1][2]->text])->toBe(['151', '+51'])
         ->and([$playerRows[2][1]->text, $playerRows[2][2]->text])->toBe(['550', '+50'])
         ->and([$playerRows[3][1]->text, $playerRows[3][2]->text])->toBe(['1 250', '+250'])
         ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[1]))->toBe(['250+', '1', '0', '1'])
         ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[2]))->toBe(['100+', '2', '1', '1'])
         ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[3]))->toBe(['50+', '3', '2', '1'])
-        ->and($sent->blocks[3]->text)->toBe('Убийств за месяц: 250 (≈ 41 мин 40 сек в игре)')
+        ->and($sent->blocks[3]->text)->toBe('Убийств за месяц: 250 (≈0 на игрока)')
+        ->and($sent->blocks[4]->text)->toBe('Игроков за месяц: 1 250 (≈1 сек в игре)')
         ->and(collect($sent->blocks)->contains(fn ($block): bool => $block instanceof InputRichBlockPhoto))->toBeFalse();
 });
 
@@ -1187,9 +1188,10 @@ test('scheduled digest prepares period trends and points thresholds and renders 
     expect($prepared->analytics->playerCountTrends)->toBe($trendData)
         ->and($prepared->analytics->pointsThresholds)->toBe($thresholdData)
         ->and($prepared->monthlyKills)->toBe(9010)
-        ->and($russian->blocks)->toHaveCount(4)
+        ->and($russian->blocks)->toHaveCount(5)
         ->and($russian->blocks[0]->text)->toBe('Pixel World · Статистика')
-        ->and($russian->blocks[3]->text)->toBe('Убийств за месяц: 9 010 (≈30 на игрока или 2 мин в игре)')
+        ->and($russian->blocks[3]->text)->toBe('Убийств за месяц: 9 010 (≈30 на игрока)')
+        ->and($russian->blocks[4]->text)->toBe('Игроков за месяц: 300 (≈2 мин в игре)')
         ->and($playerRows)->toHaveCount(4)
         ->and(array_map(fn ($cell) => $cell->text, $playerRows[1]))->toBe(['День', '100', '+10'])
         ->and($thresholdRows)->toHaveCount(4)

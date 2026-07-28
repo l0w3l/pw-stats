@@ -32,8 +32,9 @@ return [
         'week' => 'Еженедельно',
         'month' => 'Ежемесячно',
     ],
-    'monthly_kills' => 'Убийств за месяц: :kills (≈:average_kills на игрока или :time в игре)',
+    'monthly_kills' => 'Убийств за месяц: :kills (≈:average_kills на игрока)',
     'monthly_kills_without_average' => 'Убийств за месяц: :kills',
+    'monthly_players' => 'Игроков за месяц: :players (≈:time в игре)',
     'duration' => [
         'days' => 'д',
         'hours' => 'ч',

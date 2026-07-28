@@ -78,6 +78,7 @@ class LeaderboardAnalytics
 
         return new LeaderboardAnalyticsData(
             playerCountTrends: $playerCountTrends,
+            pointsThresholds: [],
             mostActivePlayers: $mostActivePlayers,
             momentumPlayers: $momentumPlayers,
             latestCollectedAt: $latestCollectedAt,

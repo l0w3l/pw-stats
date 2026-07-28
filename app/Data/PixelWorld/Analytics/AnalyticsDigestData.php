@@ -8,6 +8,5 @@ final readonly class AnalyticsDigestData
 {
     public function __construct(
         public LeaderboardAnalyticsData $analytics,
-        public ?PlayerCountChartData $chart,
     ) {}
 }

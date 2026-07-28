@@ -9,25 +9,21 @@ use App\Data\PixelWorld\Analytics\LeaderboardAnalyticsData;
 use App\Data\Telegram\TelegramContext;
 use App\Models\TelegramNotification;
 use App\Queries\CurrentPlayerCountAnalytics;
-use App\Services\PixelWorld\Charts\PlayerCountChartService;
-use App\Telegram\Messages\AnalyticsChartMediaFactory;
+use App\Queries\CurrentPointsThresholdAnalytics;
 use App\Telegram\Messages\SettingsRichMessageFactory;
 use App\Telegram\Messages\SettingsView;
-use Illuminate\Support\Facades\Log;
 use Phptg\BotApi\FailResult;
 use Phptg\BotApi\Type\Message;
 use Phptg\BotApi\Type\Update\Update;
-use Throwable;
 
 class TelegramSettings
 {
     public function __construct(
         private readonly TelegramContextResolver $contexts,
         private readonly TelegramNotificationSubscriptions $subscriptions,
-        private readonly CurrentPlayerCountAnalytics $analytics,
+        private readonly CurrentPlayerCountAnalytics $playerCountAnalytics,
+        private readonly CurrentPointsThresholdAnalytics $pointsThresholdAnalytics,
         private readonly SettingsRichMessageFactory $messages,
-        private readonly PlayerCountChartService $charts,
-        private readonly AnalyticsChartMediaFactory $chartMedia,
         private readonly TelegramRichMessageGateway $gateway,
         private readonly TelegramSettingsAuthorization $authorization,
         private readonly TelegramInboundRateLimiter $inboundRateLimiter,
@@ -120,23 +116,15 @@ class TelegramSettings
 
     private function view(TelegramNotification $subscription): SettingsView
     {
-        $chart = null;
-
-        try {
-            $artifact = $this->charts->generate($subscription->locale);
-            $chart = $artifact === null ? null : $this->chartMedia->make($artifact, $subscription->locale);
-        } catch (Throwable) {
-            Log::warning('Telegram settings chart generation failed; sending settings without it.', [
-                'subscription_id' => $subscription->id,
-                'locale' => $subscription->locale,
-            ]);
-        }
-
         return $this->messages->make(
-            new LeaderboardAnalyticsData($this->analytics->get(), [], []),
+            new LeaderboardAnalyticsData(
+                playerCountTrends: $this->playerCountAnalytics->get(),
+                pointsThresholds: $this->pointsThresholdAnalytics->get(),
+                mostActivePlayers: [],
+                momentumPlayers: [],
+            ),
             $subscription,
             $subscription->locale,
-            $chart,
         );
     }
 

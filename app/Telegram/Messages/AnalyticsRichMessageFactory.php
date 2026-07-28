@@ -6,9 +6,9 @@ namespace App\Telegram\Messages;
 
 use App\Data\PixelWorld\Analytics\LeaderboardAnalyticsData;
 use App\Data\PixelWorld\Analytics\PlayerCountTrendData;
+use App\Data\PixelWorld\Analytics\PointsThresholdData;
 use Illuminate\Contracts\Translation\Translator;
 use Phptg\BotApi\Type\InputRichBlockParagraph;
-use Phptg\BotApi\Type\InputRichBlockPhoto;
 use Phptg\BotApi\Type\InputRichBlockSectionHeading;
 use Phptg\BotApi\Type\InputRichBlockTable;
 use Phptg\BotApi\Type\InputRichMessage;
@@ -27,7 +27,6 @@ class AnalyticsRichMessageFactory
 
     public function make(
         LeaderboardAnalyticsData $analytics,
-        ?InputRichBlockPhoto $chart = null,
         ?string $locale = null,
     ): InputRichMessage {
         $locale = $this->translations->locale($locale);
@@ -47,10 +46,11 @@ class AnalyticsRichMessageFactory
             isBordered: true,
             isStriped: true,
         );
-
-        if ($chart !== null) {
-            $blocks[] = $chart;
-        }
+        $blocks[] = new InputRichBlockTable(
+            cells: $this->pointsThresholdRows($analytics, $locale),
+            isBordered: true,
+            isStriped: true,
+        );
 
         return new InputRichMessage(blocks: $blocks);
     }
@@ -76,6 +76,54 @@ class AnalyticsRichMessageFactory
         }
 
         return $rows;
+    }
+
+    /** @return array<int, array<int, RichBlockTableCell>> */
+    private function pointsThresholdRows(LeaderboardAnalyticsData $analytics, string $locale): array
+    {
+        $rows = [$this->headerRow([
+            $this->translations->get('telegram.table.points', $locale),
+            'DAY',
+            'WEEK',
+            'MONTH',
+        ])];
+
+        foreach ([50, 100, 250] as $minimumPoints) {
+            $rows[] = [
+                $this->cell("{$minimumPoints}+"),
+                ...array_map(
+                    fn (string $range): RichBlockTableCell => $this->cell(
+                        $this->formatThreshold($this->threshold($analytics, $range), $minimumPoints),
+                        align: 'right',
+                    ),
+                    ['day', 'week', 'month'],
+                ),
+            ];
+        }
+
+        return $rows;
+    }
+
+    private function threshold(LeaderboardAnalyticsData $analytics, string $range): ?PointsThresholdData
+    {
+        foreach ($analytics->pointsThresholds as $threshold) {
+            if ($threshold->range === $range) {
+                return $threshold;
+            }
+        }
+
+        return null;
+    }
+
+    private function formatThreshold(?PointsThresholdData $threshold, int $minimumPoints): string
+    {
+        $value = match ($minimumPoints) {
+            50 => $threshold?->playersAtLeast50,
+            100 => $threshold?->playersAtLeast100,
+            250 => $threshold?->playersAtLeast250,
+        };
+
+        return $value === null ? '—' : (string) $value;
     }
 
     /** @param list<string> $labels @return array<int, RichBlockTableCell> */

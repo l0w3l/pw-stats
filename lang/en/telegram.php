@@ -16,6 +16,7 @@ return [
         'period' => 'Period',
         'players' => 'Players',
         'delta' => 'Δ',
+        'points' => 'Points',
     ],
     'controls' => [
         'enable' => '🔔 Enable',

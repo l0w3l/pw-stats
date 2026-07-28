@@ -5,6 +5,7 @@ use App\Models\PixelWorldLeaderboardPeriodEntry;
 use App\Models\PixelWorldPlayer;
 use App\Models\PixelWorldPlayerTotal;
 use App\Queries\CurrentPlayerCountAnalytics;
+use App\Queries\CurrentPointsThresholdAnalytics;
 use App\Queries\LeaderboardAnalytics;
 use App\Queries\PeriodPlayerCountTrends;
 use App\Services\PixelWorld\Leaderboard\LeaderboardClient;
@@ -143,6 +144,90 @@ test('per range fallback preserves period analytics when a player total sample i
 
 test('persisted player total query is deterministic when data is absent', function () {
     expect((new CurrentPlayerCountAnalytics)->get())->toBe([]);
+});
+
+test('current points thresholds count exact boundaries cumulatively in range order with one query', function () {
+    // Arrange
+    $collectedAt = CarbonImmutable::parse('2026-07-22 12:35:00', 'UTC');
+    $day = analyticsPeriod('day', '2026-07-22', '2026-07-22', 6, $collectedAt);
+
+    foreach ([49, 50, 99, 100, 249, 250] as $place => $points) {
+        analyticsEntry($day, "boundary-{$points}", $place + 1, $points);
+    }
+
+    $week = analyticsPeriod('week', '2026-07-20', '2026-07-26', 0, $collectedAt);
+    $month = analyticsPeriod('month', '2026-07-01', '2026-07-31', 1, $collectedAt);
+    analyticsEntry($month, 'month-boundary-250', 1, 250);
+
+    DB::flushQueryLog();
+    DB::enableQueryLog();
+
+    // Act
+    $thresholds = (new CurrentPointsThresholdAnalytics)->get();
+    $queries = DB::getQueryLog();
+
+    DB::disableQueryLog();
+
+    // Assert
+    expect(array_map(fn ($threshold) => $threshold->range, $thresholds))
+        ->toBe(['day', 'week', 'month'])
+        ->and([
+            $thresholds[0]->playersAtLeast50,
+            $thresholds[0]->playersAtLeast100,
+            $thresholds[0]->playersAtLeast250,
+        ])->toBe([5, 3, 1])
+        ->and([
+            $thresholds[1]->playersAtLeast50,
+            $thresholds[1]->playersAtLeast100,
+            $thresholds[1]->playersAtLeast250,
+        ])->toBe([0, 0, 0])
+        ->and([
+            $thresholds[2]->playersAtLeast50,
+            $thresholds[2]->playersAtLeast100,
+            $thresholds[2]->playersAtLeast250,
+        ])->toBe([1, 1, 1])
+        ->and($queries)->toHaveCount(1);
+});
+
+test('current points thresholds use the latest persisted period and distinguish absent ranges from zero', function () {
+    // Arrange
+    $olderDay = analyticsPeriod(
+        'day',
+        '2026-07-21',
+        '2026-07-21',
+        1,
+        CarbonImmutable::parse('2026-07-23 12:35:00', 'UTC'),
+    );
+    analyticsEntry($olderDay, 'older-qualifying-player', 1, 250);
+
+    $latestDay = analyticsPeriod(
+        'day',
+        '2026-07-22',
+        '2026-07-22',
+        1,
+        CarbonImmutable::parse('2026-07-22 12:35:00', 'UTC'),
+    );
+    analyticsEntry($latestDay, 'latest-below-threshold-player', 1, 49);
+
+    // Act
+    $thresholds = (new CurrentPointsThresholdAnalytics)->get();
+
+    // Assert
+    expect([
+        $thresholds[0]->playersAtLeast50,
+        $thresholds[0]->playersAtLeast100,
+        $thresholds[0]->playersAtLeast250,
+    ])->toBe([0, 0, 0])
+        ->and([
+            $thresholds[1]->playersAtLeast50,
+            $thresholds[1]->playersAtLeast100,
+            $thresholds[1]->playersAtLeast250,
+        ])->toBe([null, null, null])
+        ->and([
+            $thresholds[2]->playersAtLeast50,
+            $thresholds[2]->playersAtLeast100,
+            $thresholds[2]->playersAtLeast250,
+        ])->toBe([null, null, null]);
 });
 
 test('scheduled player count trends use leaderboard periods instead of minute totals', function () {

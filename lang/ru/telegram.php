@@ -16,6 +16,7 @@ return [
         'period' => 'Период',
         'players' => 'Игроки',
         'delta' => 'Δ',
+        'points' => 'Очки',
     ],
     'controls' => [
         'enable' => '🔔 Включить',

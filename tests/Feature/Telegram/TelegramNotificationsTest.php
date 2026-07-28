@@ -5,15 +5,18 @@ use App\Contracts\Telegram\TelegramChatMemberGateway;
 use App\Contracts\Telegram\TelegramRichMessageGateway;
 use App\Data\PixelWorld\Analytics\AnalyticsDigestData;
 use App\Data\PixelWorld\Analytics\LeaderboardAnalyticsData;
-use App\Data\PixelWorld\Analytics\PlayerCountChartData;
 use App\Data\PixelWorld\Analytics\PlayerCountTrendData;
+use App\Data\PixelWorld\Analytics\PointsThresholdData;
 use App\Data\Telegram\TelegramContext;
 use App\Jobs\SendTelegramNotificationBatch;
 use App\Models\PixelWorldLeaderboardPeriod;
+use App\Models\PixelWorldLeaderboardPeriodEntry;
+use App\Models\PixelWorldPlayer;
 use App\Models\PixelWorldPlayerTotal;
 use App\Models\TelegramNotification;
 use App\Models\TelegramNotificationDelivery;
 use App\Queries\CurrentPlayerCountAnalytics;
+use App\Queries\CurrentPointsThresholdAnalytics;
 use App\Queries\LeaderboardAnalytics;
 use App\Queries\PeriodPlayerCountTrends;
 use App\Services\PixelWorld\Auth\PixelWorldTokenProvider;
@@ -30,7 +33,6 @@ use App\Services\Telegram\TelegramSettings;
 use App\Services\Telegram\TelegramSettingsAuthorization;
 use App\Telegram\Handlers\NotificationSwitchCommandHandler;
 use App\Telegram\Handlers\NotificationToggleCallbackHandler;
-use App\Telegram\Messages\AnalyticsChartMediaFactory;
 use App\Telegram\Messages\AnalyticsDigestBuilder;
 use App\Telegram\Messages\AnalyticsRichMessageFactory;
 use App\Telegram\Messages\SettingsRichMessageFactory;
@@ -52,6 +54,7 @@ use Phptg\BotApi\Type\ChatMember;
 use Phptg\BotApi\Type\ChatMemberAdministrator;
 use Phptg\BotApi\Type\ChatMemberMember;
 use Phptg\BotApi\Type\InlineKeyboardMarkup;
+use Phptg\BotApi\Type\InputRichBlockPhoto;
 use Phptg\BotApi\Type\InputRichMessage;
 use Phptg\BotApi\Type\Message;
 use Phptg\BotApi\Type\ResponseParameters;
@@ -73,8 +76,12 @@ function telegramMessage(int $chatId = 1): Message
 function telegramDigestData(): AnalyticsDigestData
 {
     return new AnalyticsDigestData(
-        new LeaderboardAnalyticsData([new PlayerCountTrendData('day', 100, 90, 10)], [], []),
-        new PlayerCountChartData([], []),
+        new LeaderboardAnalyticsData(
+            playerCountTrends: [new PlayerCountTrendData('day', 100, 90, 10)],
+            pointsThresholds: [],
+            mostActivePlayers: [],
+            momentumPlayers: [],
+        ),
     );
 }
 
@@ -83,7 +90,7 @@ function telegramSettings(
     int $analyticsCalls = 0,
     ?TelegramRichMessageGateway $gateway = null,
     ?CurrentPlayerCountAnalytics $analytics = null,
-    ?PlayerCountChartService $charts = null,
+    ?CurrentPointsThresholdAnalytics $thresholds = null,
 ): TelegramSettings {
     $memberGateway = Mockery::mock(TelegramChatMemberGateway::class);
     if ($member === null) {
@@ -98,12 +105,11 @@ function telegramSettings(
             ->times($analyticsCalls)
             ->andReturn([]);
     }
-    if ($charts === null) {
-        $charts = Mockery::mock(PlayerCountChartService::class);
-        $charts->shouldReceive('generate')
+    if ($thresholds === null) {
+        $thresholds = Mockery::mock(CurrentPointsThresholdAnalytics::class);
+        $thresholds->shouldReceive('get')
             ->times($analyticsCalls)
-            ->with(Mockery::type('string'))
-            ->andReturnNull();
+            ->andReturn([]);
     }
     if ($gateway === null) {
         $gateway = Mockery::mock(TelegramRichMessageGateway::class);
@@ -117,9 +123,8 @@ function telegramSettings(
         new TelegramContextResolver,
         new TelegramNotificationSubscriptions,
         $analytics,
+        $thresholds,
         new SettingsRichMessageFactory,
-        $charts,
-        new AnalyticsChartMediaFactory,
         $gateway,
         new TelegramSettingsAuthorization($memberGateway),
         new TelegramInboundRateLimiter(app(CacheManager::class)),
@@ -685,15 +690,22 @@ test('message not modified is a successful callback no-op without fallback', fun
     expect($changed?->enabled)->toBeTrue();
 });
 
-test('start uses latest persisted minute totals with per range period fallback without upstream calls', function () {
+test('start renders persisted minute totals and points thresholds without upstream or chart calls', function () {
     config()->set('telegram_notifications.inbound_rate_limit.cache_store', 'array');
     $sampledAt = CarbonImmutable::parse('2026-07-22 12:35:00', 'UTC');
     telegramAnalyticsPeriod('day', '2026-07-21', '2026-07-21', 100, $sampledAt->subDay());
-    telegramAnalyticsPeriod('day', '2026-07-22', '2026-07-22', 140, $sampledAt);
+    $day = telegramAnalyticsPeriod('day', '2026-07-22', '2026-07-22', 140, $sampledAt);
     telegramAnalyticsPeriod('week', '2026-07-13', '2026-07-19', 500, $sampledAt->subWeek());
-    telegramAnalyticsPeriod('week', '2026-07-20', '2026-07-26', 550, $sampledAt);
+    $week = telegramAnalyticsPeriod('week', '2026-07-20', '2026-07-26', 550, $sampledAt);
     telegramAnalyticsPeriod('month', '2026-06-01', '2026-06-30', 1000, $sampledAt->subMonth());
-    telegramAnalyticsPeriod('month', '2026-07-01', '2026-07-31', 1200, $sampledAt);
+    $month = telegramAnalyticsPeriod('month', '2026-07-01', '2026-07-31', 1200, $sampledAt);
+    foreach ([49, 50, 100, 250] as $place => $points) {
+        telegramAnalyticsEntry($day, "day-{$points}", $place + 1, $points);
+    }
+    foreach ([75, 100] as $place => $points) {
+        telegramAnalyticsEntry($week, "week-{$points}", $place + 1, $points);
+    }
+    telegramAnalyticsEntry($month, 'month-250', 1, 250);
     PixelWorldPlayerTotal::query()->create(['range' => 'day', 'total' => 150, 'collected_at' => $sampledAt->subMinute()]);
     PixelWorldPlayerTotal::query()->create(['range' => 'day', 'total' => 151, 'collected_at' => $sampledAt]);
     PixelWorldPlayerTotal::query()->create(['range' => 'month', 'total' => 1250, 'collected_at' => $sampledAt]);
@@ -702,6 +714,11 @@ test('start uses latest persisted minute totals with per range period fallback w
     app()->instance(PixelWorldTokenProvider::class, Mockery::mock(PixelWorldTokenProvider::class)->shouldNotReceive('token')->getMock());
     app()->instance(PlayerTotalCollector::class, Mockery::mock(PlayerTotalCollector::class)->shouldNotReceive('collect')->getMock());
     app()->instance(LeaderboardAnalytics::class, Mockery::mock(LeaderboardAnalytics::class)->shouldNotReceive('get')->getMock());
+    $charts = Mockery::mock(PlayerCountChartService::class);
+    $charts->shouldNotReceive('generate');
+    $charts->shouldNotReceive('data');
+    $charts->shouldNotReceive('generateFromData');
+    app()->instance(PlayerCountChartService::class, $charts);
 
     $sent = null;
     $gateway = Mockery::mock(TelegramRichMessageGateway::class);
@@ -712,8 +729,6 @@ test('start uses latest persisted minute totals with per range period fallback w
             return telegramMessage($chatId);
         },
     );
-    $charts = Mockery::mock(PlayerCountChartService::class);
-    $charts->shouldReceive('generate')->once()->with('ru')->andReturnNull();
     $update = telegramUpdate([
         'update_id' => 1701,
         'message' => [
@@ -725,12 +740,23 @@ test('start uses latest persisted minute totals with per range period fallback w
         ],
     ]);
 
-    telegramSettings(null, gateway: $gateway, analytics: new CurrentPlayerCountAnalytics, charts: $charts)->show($update);
+    telegramSettings(
+        null,
+        gateway: $gateway,
+        analytics: new CurrentPlayerCountAnalytics,
+        thresholds: new CurrentPointsThresholdAnalytics,
+    )->show($update);
 
-    $rows = $sent->blocks[1]->cells;
-    expect([$rows[1][1]->text, $rows[1][2]->text])->toBe(['151', '+51'])
-        ->and([$rows[2][1]->text, $rows[2][2]->text])->toBe(['550', '+50'])
-        ->and([$rows[3][1]->text, $rows[3][2]->text])->toBe(['1 250', '+250']);
+    $playerRows = $sent->blocks[1]->cells;
+    $thresholdRows = $sent->blocks[2]->cells;
+    expect($sent->blocks)->toHaveCount(3)
+        ->and([$playerRows[1][1]->text, $playerRows[1][2]->text])->toBe(['151', '+51'])
+        ->and([$playerRows[2][1]->text, $playerRows[2][2]->text])->toBe(['550', '+50'])
+        ->and([$playerRows[3][1]->text, $playerRows[3][2]->text])->toBe(['1 250', '+250'])
+        ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[1]))->toBe(['50+', '3', '2', '1'])
+        ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[2]))->toBe(['100+', '2', '1', '1'])
+        ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[3]))->toBe(['250+', '1', '0', '1'])
+        ->and(collect($sent->blocks)->contains(fn ($block): bool => $block instanceof InputRichBlockPhoto))->toBeFalse();
 });
 
 test('locale callback persists language and refreshes exact english controls in subscription scope', function () {
@@ -749,8 +775,6 @@ test('locale callback persists language and refreshes exact english controls in 
             return true;
         },
     );
-    $charts = Mockery::mock(PlayerCountChartService::class);
-    $charts->shouldReceive('generate')->once()->with('en')->andReturnNull();
     $callback = telegramSettingsCallback(
         $subscription,
         1801,
@@ -761,7 +785,6 @@ test('locale callback persists language and refreshes exact english controls in 
         telegramAdministrator(1801),
         analyticsCalls: 1,
         gateway: $gateway,
-        charts: $charts,
     )->updateLocale($callback);
 
     $controls = $keyboard->toRequestArray()['inline_keyboard'];
@@ -812,21 +835,18 @@ test('locale callback preserves authorization and topic safety', function () {
     expect($subscription->refresh()->locale)->toBe('ru');
 });
 
-test('start chart failure logs a warning and sends chartless localized settings', function () {
+test('start with missing thresholds sends localized chartless settings', function () {
     config()->set('telegram_notifications.inbound_rate_limit.cache_store', 'array');
     $subscription = TelegramNotification::query()->create(['instance_id' => 2001, 'locale' => 'en']);
-    $charts = Mockery::mock(PlayerCountChartService::class);
-    $charts->shouldReceive('generate')->once()->with('en')->andThrow(new RuntimeException('renderer failed'));
-    Log::shouldReceive('warning')->once()->with(
-        'Telegram settings chart generation failed; sending settings without it.',
-        ['subscription_id' => $subscription->id, 'locale' => 'en'],
-    );
+    $sent = null;
     $gateway = Mockery::mock(TelegramRichMessageGateway::class);
-    $gateway->shouldReceive('send')->once()->withArgs(
-        function (int $chatId, InputRichMessage $message): bool {
-            return $chatId === 2001 && count($message->blocks) === 2;
+    $gateway->shouldReceive('send')->once()->andReturnUsing(
+        function (int $chatId, InputRichMessage $message) use (&$sent): Message {
+            $sent = $message;
+
+            return telegramMessage($chatId);
         },
-    )->andReturn(telegramMessage(2001));
+    );
     $analytics = Mockery::mock(CurrentPlayerCountAnalytics::class);
     $analytics->shouldReceive('get')->once()->andReturn([
         new PlayerCountTrendData('day', 100, 90, 10),
@@ -842,9 +862,21 @@ test('start chart failure logs a warning and sends chartless localized settings'
         ],
     ]);
 
-    $shown = telegramSettings(null, gateway: $gateway, analytics: $analytics, charts: $charts)->show($update);
+    $thresholds = Mockery::mock(CurrentPointsThresholdAnalytics::class);
+    $thresholds->shouldReceive('get')->once()->andReturn([]);
 
-    expect($shown?->locale)->toBe('en');
+    $shown = telegramSettings(
+        null,
+        gateway: $gateway,
+        analytics: $analytics,
+        thresholds: $thresholds,
+    )->show($update);
+
+    $thresholdRows = $sent->blocks[2]->cells;
+    expect($shown?->locale)->toBe('en')
+        ->and($sent->blocks)->toHaveCount(3)
+        ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[1]))->toBe(['50+', '—', '—', '—'])
+        ->and(collect($sent->blocks)->contains(fn ($block): bool => $block instanceof InputRichBlockPhoto))->toBeFalse();
 });
 
 test('unauthorized callback remains a no-op without edit fallback', function () {
@@ -897,20 +929,27 @@ test('enabling after send time suppresses same day catch up', function () {
         ->and($subscriptions->due($now->addDay()))->toHaveCount(1);
 });
 
-test('settings view contains only player statistics and compact controls', function () {
+test('settings view contains both compact statistics tables and controls without a photo', function () {
     $subscription = TelegramNotification::query()->create([
         'instance_id' => 1, 'send_time' => '14:30:00', 'enabled' => true,
     ]);
-    $analytics = new LeaderboardAnalyticsData([
-        new PlayerCountTrendData('day', 100, 90, 10),
-        new PlayerCountTrendData('week', 200, null, null),
-        new PlayerCountTrendData('month', 300, 350, -50),
-    ], [], []);
+    $analytics = new LeaderboardAnalyticsData(
+        playerCountTrends: [
+            new PlayerCountTrendData('day', 100, 90, 10),
+            new PlayerCountTrendData('week', 200, null, null),
+            new PlayerCountTrendData('month', 300, 350, -50),
+        ],
+        pointsThresholds: [],
+        mostActivePlayers: [],
+        momentumPlayers: [],
+    );
 
     $view = (new SettingsRichMessageFactory)->make($analytics, $subscription);
 
-    expect($view->message->blocks)->toHaveCount(2)
+    expect($view->message->blocks)->toHaveCount(3)
         ->and($view->message->blocks[1]->cells)->toHaveCount(4)
+        ->and($view->message->blocks[2]->cells)->toHaveCount(4)
+        ->and(collect($view->message->blocks)->contains(fn ($block): bool => $block instanceof InputRichBlockPhoto))->toBeFalse()
         ->and($view->keyboard->toRequestArray())->toBe([
             'inline_keyboard' => [[
                 ['text' => '🔕 Выключить', 'callback_data' => 'notifications:toggle:'.$subscription->id],
@@ -1001,34 +1040,46 @@ test('dispatcher builds once continues failures marks only successes and passes 
     CarbonImmutable::setTestNow();
 });
 
-test('scheduled digest uses period trends and chart failure degrades only its locale', function () {
-    $trends = Mockery::mock(PeriodPlayerCountTrends::class);
-    $trends->shouldReceive('get')->twice()->andReturn([
+test('scheduled digest prepares period trends and points thresholds and renders both tables without a photo', function () {
+    // Arrange
+    $trendData = [
         new PlayerCountTrendData('day', 100, 90, 10),
-    ]);
-    $charts = Mockery::mock(PlayerCountChartService::class);
-    $chartData = new PlayerCountChartData([], []);
-    $charts->shouldReceive('data')->twice()->andReturn($chartData);
-    $charts->shouldReceive('generateFromData')->once()->with($chartData, 'ru')->andReturnNull();
-    $charts->shouldReceive('generateFromData')->once()->with($chartData, 'en')->andThrow(new RuntimeException('renderer failed'));
-    Log::shouldReceive('warning')->once()->with(
-        'Analytics chart generation failed; sending digest without it.',
-        ['locale' => 'en'],
-    );
+        new PlayerCountTrendData('week', 200, 180, 20),
+        new PlayerCountTrendData('month', 300, 270, 30),
+    ];
+    $thresholdData = [
+        new PointsThresholdData('day', 30, 20, 10),
+        new PointsThresholdData('week', 60, 40, 20),
+        new PointsThresholdData('month', 90, 60, 30),
+    ];
+    $trends = Mockery::mock(PeriodPlayerCountTrends::class);
+    $trends->shouldReceive('get')->once()->andReturn($trendData);
+    $thresholds = Mockery::mock(CurrentPointsThresholdAnalytics::class);
+    $thresholds->shouldReceive('get')->once()->andReturn($thresholdData);
     $builder = new AnalyticsDigestBuilder(
         $trends,
+        $thresholds,
         new AnalyticsRichMessageFactory,
-        $charts,
-        new AnalyticsChartMediaFactory,
     );
 
-    $russian = $builder->build('ru');
-    $english = $builder->build('en');
+    // Act
+    $prepared = $builder->prepare();
+    $russian = $builder->build('ru', $prepared);
 
-    expect($russian->blocks)->toHaveCount(2)
+    // Assert
+    $playerRows = $russian->blocks[1]->cells;
+    $thresholdRows = $russian->blocks[2]->cells;
+    expect($prepared->analytics->playerCountTrends)->toBe($trendData)
+        ->and($prepared->analytics->pointsThresholds)->toBe($thresholdData)
+        ->and($russian->blocks)->toHaveCount(3)
         ->and($russian->blocks[0]->text)->toBe('Pixel World · Статистика')
-        ->and($english->blocks)->toHaveCount(2)
-        ->and($english->blocks[0]->text)->toBe('Pixel World · Statistics');
+        ->and($playerRows)->toHaveCount(4)
+        ->and(array_map(fn ($cell) => $cell->text, $playerRows[1]))->toBe(['День', '100', '+10'])
+        ->and($thresholdRows)->toHaveCount(4)
+        ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[1]))->toBe(['50+', '30', '60', '90'])
+        ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[2]))->toBe(['100+', '20', '40', '60'])
+        ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[3]))->toBe(['250+', '10', '20', '30'])
+        ->and(collect($russian->blocks)->contains(fn ($block): bool => $block instanceof InputRichBlockPhoto))->toBeFalse();
 });
 
 test('a stale pre midnight dispatch cannot duplicate or move a new day delivery backwards', function () {
@@ -1249,13 +1300,13 @@ test('digest preparation failure durably releases every sendable claim for retry
     $repository = new TelegramNotificationSubscriptions;
     $claims = $repository->claimDue($now, 2, 30);
     $builder = Mockery::mock(AnalyticsDigestBuilder::class);
-    $builder->shouldReceive('prepare')->once()->andReturn(telegramDigestData());
-    $builder->shouldReceive('build')->once()->andThrow(new RuntimeException('secret-data-source-detail'));
+    $builder->shouldReceive('prepare')->once()->andThrow(new RuntimeException('secret-data-source-detail'));
+    $builder->shouldNotReceive('build');
     $sender = Mockery::mock(TelegramNotificationSender::class);
     $sender->shouldNotReceive('deliver');
     Log::shouldReceive('error')->once()->with(
         'Telegram digest preparation failed; durable delivery outcomes were recorded.',
-        ['delivery_count' => 2, 'locale' => 'ru'],
+        ['delivery_count' => 2],
     );
     Log::shouldNotReceive('critical');
     CarbonImmutable::setTestNow($now);
@@ -1408,5 +1459,28 @@ function telegramAnalyticsPeriod(
         'missing_places' => 0,
         'is_partial' => false,
         'last_collected_at' => $collectedAt,
+    ]);
+}
+
+function telegramAnalyticsEntry(
+    PixelWorldLeaderboardPeriod $period,
+    string $nickname,
+    int $place,
+    int $points,
+): void {
+    PixelWorldPlayer::query()->create([
+        'uuid' => $nickname,
+        'nickname' => $nickname,
+        'level' => 1,
+        'has_premium' => false,
+    ]);
+    PixelWorldLeaderboardPeriodEntry::query()->create([
+        'period_id' => $period->id,
+        'player_uuid' => $nickname,
+        'place' => $place,
+        'points' => $points,
+        'nickname' => $nickname,
+        'level' => 1,
+        'has_premium' => false,
     ]);
 }

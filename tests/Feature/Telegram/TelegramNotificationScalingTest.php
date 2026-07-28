@@ -4,12 +4,13 @@ use App\Contracts\Telegram\Sleeper;
 use App\Contracts\Telegram\TelegramRichMessageGateway;
 use App\Data\PixelWorld\Analytics\AnalyticsDigestData;
 use App\Data\PixelWorld\Analytics\LeaderboardAnalyticsData;
-use App\Data\PixelWorld\Analytics\PlayerCountChartData;
 use App\Data\PixelWorld\Analytics\PlayerCountTrendData;
+use App\Data\PixelWorld\Analytics\PointsThresholdData;
 use App\Data\Telegram\TelegramContext;
 use App\Jobs\SendTelegramNotificationBatch;
 use App\Models\TelegramNotification;
 use App\Models\TelegramNotificationDelivery;
+use App\Queries\CurrentPointsThresholdAnalytics;
 use App\Queries\PeriodPlayerCountTrends;
 use App\Services\PixelWorld\Charts\PlayerCountChartService;
 use App\Services\Telegram\TelegramNotificationDispatcher;
@@ -18,7 +19,6 @@ use App\Services\Telegram\TelegramNotificationSubscriptions;
 use App\Services\Telegram\TelegramRateLimiter;
 use App\Telegram\Messages\AnalyticsChartMediaFactory;
 use App\Telegram\Messages\AnalyticsDigestBuilder;
-use App\Telegram\Messages\AnalyticsRichMessageFactory;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -50,8 +50,12 @@ function postgresConcurrencyUrl(): ?string
 function scalingDigestData(): AnalyticsDigestData
 {
     return new AnalyticsDigestData(
-        new LeaderboardAnalyticsData([new PlayerCountTrendData('day', 100, 90, 10)], [], []),
-        new PlayerCountChartData([], []),
+        new LeaderboardAnalyticsData(
+            playerCountTrends: [new PlayerCountTrendData('day', 100, 90, 10)],
+            pointsThresholds: [],
+            mostActivePlayers: [],
+            momentumPlayers: [],
+        ),
     );
 }
 
@@ -160,7 +164,7 @@ test('large due sets advance in stable bounded batches', function () {
         ->and(TelegramNotificationDelivery::query()->count())->toBe(($batchSize * 3) + 2);
 });
 
-test('bounded mixed locale batch queries period trends once and generates one digest and chart per locale', function () {
+test('bounded mixed locale batch loads report data once and shares one chartless digest per locale', function () {
     // Arrange: four recipients span RU, EN, and one unsupported persisted value.
     $now = CarbonImmutable::parse('2026-07-21 12:30:00', 'UTC');
     CarbonImmutable::setTestNow($now);
@@ -181,17 +185,21 @@ test('bounded mixed locale batch queries period trends once and generates one di
     $trends->shouldReceive('get')->once()->andReturn([
         new PlayerCountTrendData('day', 100, 90, 10),
     ]);
+    $thresholds = Mockery::mock(CurrentPointsThresholdAnalytics::class);
+    $thresholds->shouldReceive('get')->once()->andReturn([
+        new PointsThresholdData('day', 50, 25, 10),
+        new PointsThresholdData('week', 100, 50, 20),
+        new PointsThresholdData('month', 150, 75, 30),
+    ]);
     $charts = Mockery::mock(PlayerCountChartService::class);
-    $chartData = new PlayerCountChartData([], []);
-    $charts->shouldReceive('data')->once()->andReturn($chartData);
-    $charts->shouldReceive('generateFromData')->once()->with($chartData, 'ru')->andReturnNull();
-    $charts->shouldReceive('generateFromData')->once()->with($chartData, 'en')->andReturnNull();
-    $builder = new AnalyticsDigestBuilder(
-        $trends,
-        new AnalyticsRichMessageFactory,
-        $charts,
-        new AnalyticsChartMediaFactory,
-    );
+    $charts->shouldNotReceive('data', 'generateFromData');
+    $chartMedia = Mockery::mock(AnalyticsChartMediaFactory::class);
+    $chartMedia->shouldNotReceive('make');
+    app()->instance(PeriodPlayerCountTrends::class, $trends);
+    app()->instance(CurrentPointsThresholdAnalytics::class, $thresholds);
+    app()->instance(PlayerCountChartService::class, $charts);
+    app()->instance(AnalyticsChartMediaFactory::class, $chartMedia);
+    $builder = app(AnalyticsDigestBuilder::class);
     $gateway = new class implements TelegramRichMessageGateway
     {
         /** @var array<int, InputRichMessage> */

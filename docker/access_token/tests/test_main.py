@@ -49,7 +49,6 @@ def test_configuration_uses_mtproto_credentials_without_an_internal_secret(
     monkeypatch.setenv("TELEGRAM_API_ID", "1")
     monkeypatch.setenv("TELEGRAM_API_HASH", "api-hash")
     monkeypatch.setenv("TELEGRAM_SESSION_NAME", "session_data/test")
-    monkeypatch.setenv("PIXEL_WORLD_BOT_USERNAME_ALLOWLIST", "pixelworld")
     monkeypatch.delenv("ACCESS_TOKEN_INTERNAL_SECRET", raising=False)
 
     configured = Settings(_env_file=None)
@@ -110,23 +109,23 @@ def test_allowed_endpoint_returns_exact_data(
     assert slot.released is True
 
 
-def test_unlisted_bot_is_rejected_before_telegram(
+def test_requested_bot_is_forwarded_to_telegram(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    called = False
+    async def no_rate_limit() -> None:
+        return None
 
-    async def telegram_result(_: str) -> str:
-        nonlocal called
-        called = True
+    async def telegram_result(bot_username: str) -> str:
+        assert bot_username == "other_bot"
         return MANDATORY_DATA
 
+    slot = AvailableSlot()
+    monkeypatch.setattr(main.request_limiter, "acquire", no_rate_limit)
+    monkeypatch.setattr(main, "telegram_slots", slot)
     monkeypatch.setattr(main, "get_main_web_view_data", telegram_result)
 
-    with pytest.raises(HTTPException) as raised:
-        run(main.main_web_view("other_bot"))
-
-    assert raised.value.status_code == 403
-    assert called is False
+    assert run(main.main_web_view("@Other_Bot")) == {"decoded": MANDATORY_DATA}
+    assert slot.released is True
 
 
 def test_failures_do_not_log_credentials(

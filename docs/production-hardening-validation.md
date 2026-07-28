@@ -17,7 +17,7 @@ Validated on 2026-07-21.
 ## Report traceability
 
 - Credential logs: removed and covered by sidecar log-redaction tests.
-- Sidecar access: private network isolation, explicit bot allowlist, one operation, and concurrency/rate bounds.
+- Sidecar access: Docker network isolation, one operation, and concurrency/rate bounds.
 - Telegram init-data mutation: exact payload preservation tests cover ordering, duplicates, reserved and extra signed fields.
 - Group settings authorization: private/admin/member/channel/topic and inbound-throttle tests.
 - Guzzle advisories and redirects: Guzzle 7.15.1, redirects disabled, Composer audit clean.

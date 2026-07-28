@@ -148,10 +148,8 @@ app = FastAPI(
 async def main_web_view(
     bot_username: str = Query(min_length=1, max_length=64),
 ) -> dict[str, str]:
-    """Return exact init data for an explicitly allowed Pixel World bot."""
+    """Return exact init data for the requested Telegram Mini App bot."""
     normalized_username = bot_username.removeprefix("@").lower()
-    if normalized_username not in settings.allowed_bot_username_set:
-        raise HTTPException(status_code=403, detail="Bot is not allowed.")
 
     retry_after = await request_limiter.acquire()
     if retry_after is not None:

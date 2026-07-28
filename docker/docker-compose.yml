@@ -104,7 +104,6 @@ services:
         build: ./access_token
         environment:
             TELEGRAM_SESSION_NAME: session_data/session_name
-            PIXEL_WORLD_BOT_USERNAME_ALLOWLIST: "${PIXEL_WORLD_BOT_USERNAME_ALLOWLIST:?Set PIXEL_WORLD_BOT_USERNAME_ALLOWLIST in docker/.env}"
         restart: unless-stopped
         networks:
             - backend

@@ -2,10 +2,10 @@
 
 ## Required configuration
 
-- Set `PIXEL_WORLD_BOT_USERNAME` to the mini-app bot and keep it in `PIXEL_WORLD_BOT_USERNAME_ALLOWLIST` for the sidecar.
+- Set the Telegram MTProto API ID/hash in `docker/.env` and authenticate the persisted session with `docker/telegram_auth.sh`.
 - Store bearer tokens, notification locks, and inbound throttles in Redis in multi-process production.
 
-The access-token sidecar exposes only the allowlisted main WebView operation on the private Docker network. It returns the exact once-decoded Telegram init-data string, runs as a non-root user, and does not log credential-bearing URLs or payloads. Laravel separately exchanges that init data for the Pixel World Bearer token and caches both values with bounded lifetimes.
+The access-token sidecar exposes only the main WebView operation on the Docker network. It returns the exact once-decoded Telegram init-data string, runs as a non-root user, and does not log credential-bearing URLs or payloads. Laravel separately exchanges that init data for the Pixel World Bearer token and caches both values with bounded lifetimes.
 
 ## Docker runtime
 

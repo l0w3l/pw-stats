@@ -109,8 +109,8 @@ test('digest renders exact localized player and points tables without a photo', 
         ->and(collect($message->blocks)->contains(fn ($block): bool => $block instanceof InputRichBlockPhoto))->toBeFalse()
         ->and($payload)->toContain($heading)
         ->and($payload)->toContain($locale === 'en'
-            ? 'Kills this month: 9 010 (≈ 1 d 1 h 1 min 40 sec in game)'
-            : 'Убийств за месяц: 9 010 (≈ 1 д 1 ч 1 мин 40 сек в игре)')
+            ? 'Kills this month: 9 010 (≈30 kills per player or 2 min in game)'
+            : 'Убийств за месяц: 9 010 (≈30 на игрока или 2 мин в игре)')
         ->and($payload)->not->toContain('Slayer')
         ->and($payload)->not->toContain('16.07.2026')
         ->and($payload)->not->toContain('momentum')
@@ -171,6 +171,21 @@ test('empty digest is compact and localized', function () {
         ->and(json_encode($message->toRequestArray(), JSON_THROW_ON_ERROR))->toContain('No data.');
 });
 
+test('monthly kills omit the average when the monthly player count is unavailable', function () {
+    $analytics = new LeaderboardAnalyticsData(
+        playerCountTrends: [new PlayerCountTrendData('day', 10, null, null)],
+        pointsThresholds: [],
+        mostActivePlayers: [],
+        momentumPlayers: [],
+    );
+
+    $message = (new AnalyticsRichMessageFactory)->make($analytics, monthlyKills: 100, locale: 'en');
+    $payload = json_encode($message->toRequestArray(), JSON_THROW_ON_ERROR);
+
+    expect($payload)->toContain('Kills this month: 100')
+        ->and($payload)->not->toContain('kills per player');
+});
+
 test('settings contains only localized statistics and exact RU and EN controls', function (
     string $locale,
     string $heading,
@@ -211,8 +226,8 @@ test('settings contains only localized statistics and exact RU and EN controls',
         ->and(collect($view->message->blocks)->contains(fn ($block): bool => $block instanceof InputRichBlockPhoto))->toBeFalse()
         ->and($payload)->toContain($heading)
         ->and($payload)->toContain($locale === 'en'
-            ? 'Kills this month: 9 010 (≈ 1 d 1 h 1 min 40 sec in game)'
-            : 'Убийств за месяц: 9 010 (≈ 1 д 1 ч 1 мин 40 сек в игре)')
+            ? 'Kills this month: 9 010 (≈30 kills per player or 2 min in game)'
+            : 'Убийств за месяц: 9 010 (≈30 на игрока или 2 мин в игре)')
         ->and($payload)->not->toContain('Slayer')
         ->and($payload)->not->toContain('2026', '12:30', '14:30', 'momentum')
         ->and(array_column($keyboard[1], 'text'))->toBe(['RU', 'EN'])

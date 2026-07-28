@@ -30,11 +30,20 @@ final readonly class TelegramTranslations
         return is_string($value) ? $value : $key;
     }
 
-    public function monthlyKills(int $kills, ?string $locale): string
+    public function monthlyKills(int $kills, ?int $players, ?string $locale): string
     {
+        if ($players === null || $players < 1) {
+            return $this->get('telegram.monthly_kills_without_average', $locale, [
+                'kills' => number_format($kills, 0, '.', ' '),
+            ]);
+        }
+
+        $averageKills = (int) round($kills / $players);
+
         return $this->get('telegram.monthly_kills', $locale, [
             'kills' => number_format($kills, 0, '.', ' '),
-            'time' => $this->formatPlayTime($kills * 10, $this->locale($locale)),
+            'average_kills' => number_format($averageKills, 0, '.', ' '),
+            'time' => $this->formatPlayTime($averageKills * 4, $this->locale($locale)),
         ]);
     }
 

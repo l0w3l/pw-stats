@@ -14,6 +14,7 @@ test('scheduled digest contains totals and points thresholds without a graph', f
     $trends = Mockery::mock(PeriodPlayerCountTrends::class);
     $trends->shouldReceive('get')->once()->andReturn([
         new PlayerCountTrendData('day', 100, 90, 10),
+        new PlayerCountTrendData('month', 12, 10, 2),
     ]);
     $thresholds = Mockery::mock(CurrentPointsThresholdAnalytics::class);
     $thresholds->shouldReceive('get')->once()->andReturn([
@@ -35,7 +36,7 @@ test('scheduled digest contains totals and points thresholds without a graph', f
     expect($message->blocks)->toHaveCount(4)
         ->and($tables)->toHaveCount(2)
         ->and(json_encode($message->toRequestArray(), JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE))
-        ->toContain('Убийств за месяц: 366 (≈ 1 ч 1 мин в игре)')
+        ->toContain('Убийств за месяц: 366 (≈31 на игрока или 2 мин 4 сек в игре)')
         ->and(collect($message->blocks)->contains(
             fn ($block): bool => $block instanceof InputRichBlockPhoto,
         ))->toBeFalse();

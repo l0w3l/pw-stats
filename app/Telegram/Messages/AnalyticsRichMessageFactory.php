@@ -55,7 +55,11 @@ class AnalyticsRichMessageFactory
             caption: $this->translations->get('telegram.table_titles.points_thresholds', $locale),
         );
         if ($monthlyKills !== null) {
-            $blocks[] = new InputRichBlockParagraph($this->translations->monthlyKills($monthlyKills, $locale));
+            $blocks[] = new InputRichBlockParagraph($this->translations->monthlyKills(
+                $monthlyKills,
+                $this->monthlyPlayerCount($analytics),
+                $locale,
+            ));
         }
 
         return new InputRichMessage(blocks: $blocks);
@@ -115,6 +119,17 @@ class AnalyticsRichMessageFactory
         foreach ($analytics->pointsThresholds as $threshold) {
             if ($threshold->range === $range) {
                 return $threshold;
+            }
+        }
+
+        return null;
+    }
+
+    private function monthlyPlayerCount(LeaderboardAnalyticsData $analytics): ?int
+    {
+        foreach ($analytics->playerCountTrends as $trend) {
+            if ($trend->range === 'month') {
+                return $trend->current;
             }
         }
 

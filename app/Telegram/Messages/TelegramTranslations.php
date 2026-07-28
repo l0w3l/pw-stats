@@ -29,4 +29,31 @@ final readonly class TelegramTranslations
 
         return is_string($value) ? $value : $key;
     }
+
+    public function monthlyKills(int $kills, ?string $locale): string
+    {
+        return $this->get('telegram.monthly_kills', $locale, [
+            'kills' => number_format($kills, 0, '.', ' '),
+            'time' => $this->formatPlayTime($kills * 10, $this->locale($locale)),
+        ]);
+    }
+
+    private function formatPlayTime(int $seconds, string $locale): string
+    {
+        $units = [
+            'days' => [86400, intdiv($seconds, 86400)],
+            'hours' => [3600, intdiv($seconds % 86400, 3600)],
+            'minutes' => [60, intdiv($seconds % 3600, 60)],
+            'seconds' => [1, $seconds % 60],
+        ];
+        $parts = [];
+
+        foreach ($units as $unit => [$size, $value]) {
+            if ($value > 0 || ($size === 1 && $parts === [])) {
+                $parts[] = $value.' '.$this->get("telegram.duration.{$unit}", $locale);
+            }
+        }
+
+        return implode(' ', $parts);
+    }
 }

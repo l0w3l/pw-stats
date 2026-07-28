@@ -8,6 +8,7 @@ use App\Contracts\Telegram\TelegramRichMessageGateway;
 use App\Data\PixelWorld\Analytics\LeaderboardAnalyticsData;
 use App\Data\Telegram\TelegramContext;
 use App\Models\TelegramNotification;
+use App\Queries\CurrentMonthKillTotal;
 use App\Queries\CurrentPlayerCountAnalytics;
 use App\Queries\CurrentPointsThresholdAnalytics;
 use App\Telegram\Messages\SettingsRichMessageFactory;
@@ -23,6 +24,7 @@ class TelegramSettings
         private readonly TelegramNotificationSubscriptions $subscriptions,
         private readonly CurrentPlayerCountAnalytics $playerCountAnalytics,
         private readonly CurrentPointsThresholdAnalytics $pointsThresholdAnalytics,
+        private readonly CurrentMonthKillTotal $monthlyKills,
         private readonly SettingsRichMessageFactory $messages,
         private readonly TelegramRichMessageGateway $gateway,
         private readonly TelegramSettingsAuthorization $authorization,
@@ -145,6 +147,7 @@ class TelegramSettings
             ),
             $subscription,
             $subscription->locale,
+            monthlyKills: $this->monthlyKills->get(),
         );
     }
 

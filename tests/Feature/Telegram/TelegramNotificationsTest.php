@@ -92,6 +92,7 @@ function telegramSettings(
     ?TelegramRichMessageGateway $gateway = null,
     ?CurrentPlayerCountAnalytics $analytics = null,
     ?CurrentPointsThresholdAnalytics $thresholds = null,
+    ?CurrentMonthKillTotal $monthlyKills = null,
 ): TelegramSettings {
     $memberGateway = Mockery::mock(TelegramChatMemberGateway::class);
     if ($member === null) {
@@ -112,6 +113,12 @@ function telegramSettings(
             ->times($analyticsCalls)
             ->andReturn([]);
     }
+    if ($monthlyKills === null) {
+        $monthlyKills = Mockery::mock(CurrentMonthKillTotal::class);
+        $monthlyKills->shouldReceive('get')
+            ->times($analyticsCalls)
+            ->andReturn(null);
+    }
     if ($gateway === null) {
         $gateway = Mockery::mock(TelegramRichMessageGateway::class);
         $gateway->shouldReceive('send')->zeroOrMoreTimes()->andReturnUsing(
@@ -125,6 +132,7 @@ function telegramSettings(
         new TelegramNotificationSubscriptions,
         $analytics,
         $thresholds,
+        $monthlyKills,
         new SettingsRichMessageFactory,
         $gateway,
         new TelegramSettingsAuthorization($memberGateway),
@@ -794,17 +802,19 @@ test('start renders persisted minute totals and points thresholds without upstre
         gateway: $gateway,
         analytics: new CurrentPlayerCountAnalytics,
         thresholds: new CurrentPointsThresholdAnalytics,
+        monthlyKills: new CurrentMonthKillTotal,
     )->show($update);
 
     $playerRows = $sent->blocks[1]->cells;
     $thresholdRows = $sent->blocks[2]->cells;
-    expect($sent->blocks)->toHaveCount(3)
+    expect($sent->blocks)->toHaveCount(4)
         ->and([$playerRows[1][1]->text, $playerRows[1][2]->text])->toBe(['151', '+51'])
         ->and([$playerRows[2][1]->text, $playerRows[2][2]->text])->toBe(['550', '+50'])
         ->and([$playerRows[3][1]->text, $playerRows[3][2]->text])->toBe(['1 250', '+250'])
         ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[1]))->toBe(['250+', '1', '0', '1'])
         ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[2]))->toBe(['100+', '2', '1', '1'])
         ->and(array_map(fn ($cell) => $cell->text, $thresholdRows[3]))->toBe(['50+', '3', '2', '1'])
+        ->and($sent->blocks[3]->text)->toBe('Убийств за месяц: 250 (≈ 41 мин 40 сек в игре)')
         ->and(collect($sent->blocks)->contains(fn ($block): bool => $block instanceof InputRichBlockPhoto))->toBeFalse();
 });
 
@@ -959,12 +969,15 @@ test('start with missing thresholds sends localized chartless settings', functio
 
     $thresholds = Mockery::mock(CurrentPointsThresholdAnalytics::class);
     $thresholds->shouldReceive('get')->once()->andReturn([]);
+    $monthlyKills = Mockery::mock(CurrentMonthKillTotal::class);
+    $monthlyKills->shouldReceive('get')->once()->andReturn(null);
 
     $shown = telegramSettings(
         null,
         gateway: $gateway,
         analytics: $analytics,
         thresholds: $thresholds,
+        monthlyKills: $monthlyKills,
     )->show($update);
 
     $thresholdRows = $sent->blocks[2]->cells;

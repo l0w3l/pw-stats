@@ -40,6 +40,7 @@ class SettingsRichMessageFactory
         LeaderboardAnalyticsData $analytics,
         TelegramNotification $subscription,
         ?string $locale = null,
+        ?int $monthlyKills = null,
     ): SettingsView {
         $locale = $this->translations->locale($locale);
         $blocks = [new InputRichBlockSectionHeading(
@@ -62,6 +63,9 @@ class SettingsRichMessageFactory
                 isStriped: true,
                 caption: $this->translations->get('telegram.table_titles.points_thresholds', $locale),
             );
+        }
+        if ($monthlyKills !== null) {
+            $blocks[] = new InputRichBlockParagraph($this->translations->monthlyKills($monthlyKills, $locale));
         }
 
         return new SettingsView(

@@ -184,7 +184,12 @@ test('settings contains only localized statistics and exact RU and EN controls',
     $subscription->id = 17;
 
     // Act: render the requested subscription locale.
-    $view = (new SettingsRichMessageFactory)->make(localizedAnalytics(), $subscription, $locale);
+    $view = (new SettingsRichMessageFactory)->make(
+        localizedAnalytics(),
+        $subscription,
+        $locale,
+        monthlyKills: 9010,
+    );
     $payload = json_encode($view->message->toRequestArray(), JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
     $keyboard = $view->keyboard->toRequestArray()['inline_keyboard'];
 
@@ -193,17 +198,21 @@ test('settings contains only localized statistics and exact RU and EN controls',
         ->values();
 
     // Assert: exact totals and thresholds precede the unchanged necessary controls, without a graph.
-    expect($view->message->blocks)->toHaveCount(3)
+    expect($view->message->blocks)->toHaveCount(4)
         ->and(array_map(fn (object $block): string => $block::class, $view->message->blocks))->toBe([
             InputRichBlockSectionHeading::class,
             InputRichBlockTable::class,
             InputRichBlockTable::class,
+            InputRichBlockParagraph::class,
         ])
         ->and($tables->pluck('caption')->all())->toBe(expectedTableTitles($locale))
         ->and(richTableText($tables[0]))->toBe(expectedPlayerTable($locale))
         ->and(richTableText($tables[1]))->toBe(expectedPointsTable($locale))
         ->and(collect($view->message->blocks)->contains(fn ($block): bool => $block instanceof InputRichBlockPhoto))->toBeFalse()
         ->and($payload)->toContain($heading)
+        ->and($payload)->toContain($locale === 'en'
+            ? 'Kills this month: 9 010 (≈ 1 d 1 h 1 min 40 sec in game)'
+            : 'Убийств за месяц: 9 010 (≈ 1 д 1 ч 1 мин 40 сек в игре)')
         ->and($payload)->not->toContain('Slayer')
         ->and($payload)->not->toContain('2026', '12:30', '14:30', 'momentum')
         ->and(array_column($keyboard[1], 'text'))->toBe(['RU', 'EN'])

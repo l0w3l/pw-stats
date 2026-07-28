@@ -104,7 +104,6 @@ services:
         build: ./access_token
         environment:
             TELEGRAM_SESSION_NAME: session_data/session_name
-            ACCESS_TOKEN_INTERNAL_SECRET: "${ACCESS_TOKEN_INTERNAL_SECRET:?Set ACCESS_TOKEN_INTERNAL_SECRET in docker/.env}"
             PIXEL_WORLD_BOT_USERNAME_ALLOWLIST: "${PIXEL_WORLD_BOT_USERNAME_ALLOWLIST:?Set PIXEL_WORLD_BOT_USERNAME_ALLOWLIST in docker/.env}"
         restart: unless-stopped
         networks:

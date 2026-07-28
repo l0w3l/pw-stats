@@ -1,7 +1,6 @@
-"""Authenticated API for obtaining Pixel World Telegram Mini App init data."""
+"""Private API for obtaining Pixel World Telegram Mini App init data."""
 
 import asyncio
-import hmac
 import logging
 import time
 import urllib.parse
@@ -11,7 +10,7 @@ from contextlib import asynccontextmanager
 from typing import Final
 
 import uvicorn
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
+from fastapi import FastAPI, HTTPException, Query
 from telethon import TelegramClient, errors
 from telethon.tl.functions.messages import RequestMainWebViewRequest
 from telethon.tl.types import InputUser
@@ -100,24 +99,6 @@ def _extract_init_data(url: str) -> str:
     return decoded
 
 
-async def _authorize(authorization: str | None = Header(default=None)) -> None:
-    """Authenticate an internal caller without leaking secret comparison timing."""
-    scheme, separator, supplied = (authorization or "").partition(" ")
-    expected = settings.internal_api_secret.get_secret_value()
-    valid = (
-        separator == " "
-        and scheme.lower() == "bearer"
-        and bool(supplied)
-        and hmac.compare_digest(supplied.encode(), expected.encode())
-    )
-    if not valid:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unauthorized.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-
 async def get_main_web_view_data(bot_username: str) -> str:
     """Request Pixel World init data from Telegram and preserve it exactly."""
     if client is None:
@@ -163,7 +144,7 @@ app = FastAPI(
 )
 
 
-@app.get("/main_web_view", dependencies=[Depends(_authorize)])
+@app.get("/main_web_view")
 async def main_web_view(
     bot_username: str = Query(min_length=1, max_length=64),
 ) -> dict[str, str]:

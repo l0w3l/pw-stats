@@ -1,4 +1,4 @@
-"""Access-token authentication and init-data preservation tests."""
+"""Access-token MTProto configuration and init-data preservation tests."""
 
 import asyncio
 import logging
@@ -10,7 +10,6 @@ from typing import Any
 
 import pytest
 from fastapi import HTTPException
-from pydantic import ValidationError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_DIRECTORY = PROJECT_ROOT / "scripts"
@@ -19,7 +18,6 @@ sys.path.insert(0, str(SOURCE_DIRECTORY if SOURCE_DIRECTORY.is_dir() else PROJEC
 import main  # noqa: E402
 from config import Settings  # noqa: E402
 
-SECRET = "x" * 32
 MANDATORY_DATA = (
     "user=%7B%22id%22%3A1%7D&chat_instance=instance&chat_type=private"
     "&auth_date=123&signature=sig%2B%2F%3D&hash=hash-value"
@@ -45,46 +43,19 @@ def test_only_hardened_main_web_view_is_exposed() -> None:
     assert {route.path for route in main.app.routes} == {"/main_web_view"}
 
 
-@pytest.mark.parametrize(
-    "authorization,accepted",
-    [
-        (f"Bearer {SECRET}", True),
-        (None, False),
-        ("", False),
-        ("Bearer wrong", False),
-        (f"Basic {SECRET}", False),
-    ],
-)
-def test_internal_bearer_authentication(
-    authorization: str | None,
-    accepted: bool,
-) -> None:
-    if accepted:
-        assert run(main._authorize(authorization)) is None
-        return
-
-    with pytest.raises(HTTPException) as raised:
-        run(main._authorize(authorization))
-
-    assert raised.value.status_code == 401
-    assert raised.value.headers == {"WWW-Authenticate": "Bearer"}
-
-
-def test_configuration_requires_a_strong_internal_secret(
+def test_configuration_uses_mtproto_credentials_without_an_internal_secret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("TELEGRAM_API_ID", "1")
     monkeypatch.setenv("TELEGRAM_API_HASH", "api-hash")
     monkeypatch.setenv("TELEGRAM_SESSION_NAME", "session_data/test")
     monkeypatch.setenv("PIXEL_WORLD_BOT_USERNAME_ALLOWLIST", "pixelworld")
+    monkeypatch.delenv("ACCESS_TOKEN_INTERNAL_SECRET", raising=False)
 
-    for secret in ("", "short"):
-        monkeypatch.setenv("ACCESS_TOKEN_INTERNAL_SECRET", secret)
-        with pytest.raises(ValidationError):
-            Settings(_env_file=None)
+    configured = Settings(_env_file=None)
 
-    monkeypatch.setenv("ACCESS_TOKEN_INTERNAL_SECRET", SECRET)
-    assert Settings(_env_file=None).internal_api_secret.get_secret_value() == SECRET
+    assert configured.telegram_api_id == 1
+    assert configured.telegram_api_hash == "api-hash"
 
 
 def test_extract_init_data_preserves_exact_signed_string() -> None:

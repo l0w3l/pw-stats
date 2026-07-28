@@ -43,14 +43,7 @@ class TelegramWebAppDataClient implements TelegramWebAppDataProvider
 
     private function request(string $botUsername): string
     {
-        $internalSecret = (string) config('services.access-token.internal_secret');
-
-        if ($internalSecret === '') {
-            throw new \RuntimeException('Access-token internal secret is not configured.');
-        }
-
         $response = $this->retryPolicy->send(fn () => Http::acceptJson()
-            ->withToken($internalSecret)
             ->withoutRedirecting()
             ->connectTimeout((int) config('services.http.connect_timeout_seconds'))
             ->timeout((int) config('services.http.timeout_seconds'))

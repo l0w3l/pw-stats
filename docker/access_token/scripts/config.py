@@ -2,7 +2,7 @@
 
 from functools import cached_property
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,9 +16,6 @@ class Settings(BaseSettings):
     telegram_phone: str | None = None
     telegram_password: str | None = Field(default=None, repr=False)
     telegram_session_name: str
-    internal_api_secret: SecretStr = Field(
-        validation_alias="ACCESS_TOKEN_INTERNAL_SECRET"
-    )
     allowed_bot_usernames: str = Field(
         validation_alias="PIXEL_WORLD_BOT_USERNAME_ALLOWLIST"
     )
@@ -26,14 +23,6 @@ class Settings(BaseSettings):
     requests_per_minute: int = Field(default=6, ge=1, le=60)
     concurrency_wait_seconds: float = Field(default=0.25, gt=0, le=5)
     transient_retry_after_seconds: int = Field(default=5, ge=1, le=60)
-
-    @field_validator("internal_api_secret")
-    @classmethod
-    def validate_internal_api_secret(cls, value: SecretStr) -> SecretStr:
-        """Reject weak or accidentally empty internal credentials."""
-        if len(value.get_secret_value()) < 32:
-            raise ValueError("internal_api_secret must contain at least 32 characters")
-        return value
 
     @field_validator("telegram_session_name")
     @classmethod

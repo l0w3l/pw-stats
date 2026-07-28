@@ -41,7 +41,6 @@ return [
 
     'access-token' => [
         'base_uri' => env('ACCESS_TOKEN_BASE_URI', 'http://access-token:8000/'),
-        'internal_secret' => env('ACCESS_TOKEN_INTERNAL_SECRET'),
         'web_app_data_cache_ttl_seconds' => (int) env('TELEGRAM_WEB_APP_DATA_CACHE_TTL_SECONDS', 3600),
     ],
 

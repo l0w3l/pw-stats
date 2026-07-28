@@ -68,7 +68,7 @@ function expectedPlayerTable(string $locale): array
 function expectedPointsTable(string $locale): array
 {
     return [
-        [$locale === 'en' ? 'Kills' : 'Очки', 'DAY', 'WEEK', 'MONTH'],
+        [$locale === 'en' ? 'Kills' : 'Убийства', 'DAY', 'WEEK', 'MONTH'],
         ['250+', '0', '—', '10'],
         ['100+', '4', '—', '20'],
         ['50+', '9', '—', '30'],
@@ -79,8 +79,8 @@ function expectedPointsTable(string $locale): array
 function expectedTableTitles(string $locale): array
 {
     return $locale === 'en'
-        ? ['Player counts', 'Players by points']
-        : ['Количество игроков', 'Игроки по очкам'];
+        ? ['Player counts', 'Players by kills']
+        : ['Количество игроков', 'Игроки по убийствам'];
 }
 
 test('digest renders exact localized player and points tables without a photo', function (string $locale, string $heading) {

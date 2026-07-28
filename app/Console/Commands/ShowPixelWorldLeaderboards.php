@@ -53,7 +53,7 @@ class ShowPixelWorldLeaderboards extends Command
                 ->get();
 
             $this->table(
-                ['Place', 'Nickname', 'Level', 'Premium', 'Points', 'UUID'],
+                ['Place', 'Nickname', 'Level', 'Premium', 'Kills', 'UUID'],
                 $entries->map(fn ($entry): array => [
                     $entry->place,
                     $entry->nickname,

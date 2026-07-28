@@ -20,7 +20,7 @@ return [
     ],
     'table_titles' => [
         'player_counts' => 'Player counts',
-        'points_thresholds' => 'Players by points',
+        'points_thresholds' => 'Players by kills',
     ],
     'controls' => [
         'enable' => '🔔 Enable',

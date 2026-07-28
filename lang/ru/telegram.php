@@ -16,11 +16,11 @@ return [
         'period' => 'Период',
         'players' => 'Игроки',
         'delta' => 'Δ',
-        'points' => 'Очки',
+        'points' => 'Убийства',
     ],
     'table_titles' => [
         'player_counts' => 'Количество игроков',
-        'points_thresholds' => 'Игроки по очкам',
+        'points_thresholds' => 'Игроки по убийствам',
     ],
     'controls' => [
         'enable' => '🔔 Включить',

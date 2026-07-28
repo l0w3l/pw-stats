@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Telegram\Handlers\NotificationFrequencyCallbackHandler;
 use App\Telegram\Handlers\NotificationLocaleCallbackHandler;
 use App\Telegram\Handlers\NotificationRefreshCallbackHandler;
 use App\Telegram\Handlers\NotificationSwitchCommandHandler;
@@ -21,6 +22,11 @@ Telepath::onChannelPost([NotificationSwitchCommandHandler::class, 'handle'], '^n
 Telepath::onCallbackQuery(
     [NotificationToggleCallbackHandler::class, 'handle'],
     '^'.preg_quote(SettingsRichMessageFactory::CALLBACK_TOGGLE, '/').'\d+$'
+)->middleware(AnswerCallbackQueryMiddleware::class);
+
+Telepath::onCallbackQuery(
+    [NotificationFrequencyCallbackHandler::class, 'handle'],
+    '^'.preg_quote(SettingsRichMessageFactory::CALLBACK_FREQUENCY, '/').'(?:day|week|month):\d+$'
 )->middleware(AnswerCallbackQueryMiddleware::class);
 
 Telepath::onCallbackQuery(

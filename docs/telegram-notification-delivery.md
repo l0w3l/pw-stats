@@ -13,6 +13,11 @@ system therefore provides **at-least-once**, not exactly-once, delivery across t
 failure boundary. Retry exhaustion is terminal for that occurrence and is retained
 in the ledger as `exhausted`.
 
+Each subscription keeps its UTC `send_time` and a `day`, `week`, or `month`
+frequency selected from `/start`. A successfully delivered (or terminally failed)
+occurrence advances `next_send_at` by the configured cadence without changing the
+wall-clock send time.
+
 Telegram `429 retry_after` responses are persisted as the ledger's
 `next_attempt_at`; workers do not sleep for that delay. The same deadline is also
 published to the shared global/chat limiter when its cache is available. Other

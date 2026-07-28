@@ -27,6 +27,11 @@ return [
         'disable' => '🔕 Disable',
         'refresh' => '🔄 Refresh',
     ],
+    'frequencies' => [
+        'day' => 'Daily',
+        'week' => 'Weekly',
+        'month' => 'Monthly',
+    ],
     'empty' => 'No data.',
     'chart' => [
         'caption' => 'Player count history.',

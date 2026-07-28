@@ -114,6 +114,26 @@ class TelegramSettings
         return $subscription;
     }
 
+    public function updateFrequency(Update $update): ?TelegramNotification
+    {
+        $context = $this->contexts->resolve($update);
+        if (! $this->mayProceed($update, $context)) {
+            return null;
+        }
+
+        $data = $update->callbackQuery?->data;
+        $pattern = '/^'.preg_quote(SettingsRichMessageFactory::CALLBACK_FREQUENCY, '/').'(day|week|month):(\d+)$/';
+        if ($data === null || preg_match($pattern, $data, $matches) !== 1) {
+            return null;
+        }
+
+        $subscription = $this->subscriptions->findForCallback((int) $matches[2], $context);
+        $subscription = $this->subscriptions->updateFrequency($subscription, $matches[1]);
+        $this->updateOrSendReplacement($subscription, $this->view($subscription));
+
+        return $subscription;
+    }
+
     private function view(TelegramNotification $subscription): SettingsView
     {
         return $this->messages->make(

@@ -379,6 +379,8 @@ test('postgres skip locked arbitrates simultaneous claimers on separate connecti
             $table->bigInteger('instance_id');
             $table->bigInteger('thread_id')->nullable();
             $table->string('context_key')->unique();
+            $table->string('locale', 2)->default('ru');
+            $table->string('frequency', 5)->default('day');
             $table->time('send_time')->default('00:00:00');
             $table->boolean('enabled')->default(false);
             $table->timestamp('next_send_at')->nullable();

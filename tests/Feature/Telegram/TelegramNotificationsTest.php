@@ -189,12 +189,13 @@ test('notification migration and model use recurring defaults and signed bigint 
     expect($notification->instance_id)->toBe(-1001234567890)
         ->and($notification->thread_id)->toBeNull()
         ->and($notification->locale)->toBe('ru')
+        ->and($notification->frequency)->toBe('day')
         ->and($notification->send_time)->toBe('00:00:00')
         ->and($notification->enabled)->toBeFalse()
         ->and($notification->next_send_at)->toBeNull()
         ->and($notification->last_sent_at)->toBeNull()
         ->and(Schema::hasColumns('telegram_notifications', [
-            'id', 'instance_id', 'thread_id', 'context_key', 'locale', 'send_time', 'enabled', 'next_send_at', 'last_sent_at', 'created_at', 'updated_at',
+            'id', 'instance_id', 'thread_id', 'context_key', 'locale', 'frequency', 'send_time', 'enabled', 'next_send_at', 'last_sent_at', 'created_at', 'updated_at',
         ]))->toBeTrue();
 
     $columns = collect(DB::select("PRAGMA table_info('telegram_notifications')"))->keyBy('name');
@@ -203,6 +204,53 @@ test('notification migration and model use recurring defaults and signed bigint 
         ->and(strtoupper($columns['thread_id']->type))->toBe('INTEGER')
         ->and(strtoupper($columns['send_time']->type))->toContain('TIME');
 });
+
+test('notification frequencies advance recurring UTC occurrences', function (
+    string $frequency,
+    string $expected,
+) {
+    $now = CarbonImmutable::parse('2026-07-21 12:30:00', 'UTC');
+
+    expect(TelegramNotification::nextOccurrence('00:00:00', $now, $frequency)
+        ->equalTo(CarbonImmutable::parse($expected, 'UTC')))->toBeTrue();
+})->with([
+    'daily' => ['day', '2026-07-22 00:00:00'],
+    'weekly' => ['week', '2026-07-28 00:00:00'],
+    'monthly' => ['month', '2026-08-21 00:00:00'],
+]);
+
+test('subscription frequency changes preserve send time and recalculate enabled schedules', function () {
+    $now = CarbonImmutable::parse('2026-07-21 12:30:00', 'UTC');
+    $subscription = TelegramNotification::query()->create([
+        'instance_id' => 1200,
+        'send_time' => '14:30:00',
+        'enabled' => true,
+        'next_send_at' => '2026-07-21 14:30:00',
+    ]);
+    $subscriptions = new TelegramNotificationSubscriptions;
+
+    $weekly = $subscriptions->updateFrequency($subscription, 'week', $now);
+    $weeklyFrequency = $weekly->frequency;
+    $weeklySendTime = $weekly->send_time;
+    $weeklyNextSendAt = $weekly->next_send_at;
+    $monthly = $subscriptions->updateFrequency($weekly, 'month', $now);
+
+    expect($weeklyFrequency)->toBe('week')
+        ->and($weeklySendTime)->toBe('14:30:00')
+        ->and($weeklyNextSendAt?->equalTo(CarbonImmutable::parse('2026-07-21 14:30:00', 'UTC')))->toBeTrue()
+        ->and($monthly->frequency)->toBe('month')
+        ->and($monthly->send_time)->toBe('14:30:00')
+        ->and($monthly->next_send_at?->equalTo(CarbonImmutable::parse('2026-07-21 14:30:00', 'UTC')))->toBeTrue();
+});
+
+test('subscription service rejects unsupported notification frequencies', function (string $frequency) {
+    $subscription = TelegramNotification::query()->create(['instance_id' => 1201]);
+
+    expect(fn () => (new TelegramNotificationSubscriptions)->updateFrequency($subscription, $frequency))
+        ->toThrow(InvalidArgumentException::class, 'Unsupported Telegram notification frequency.');
+
+    expect($subscription->refresh()->frequency)->toBe('day');
+})->with(['daily', 'year', '', 'WEEK']);
 
 test('locale migration backfills existing subscriptions to ru', function () {
     $migration = require database_path('migrations/2026_07_22_000000_add_locale_to_telegram_notifications.php');
@@ -835,6 +883,52 @@ test('locale callback preserves authorization and topic safety', function () {
     expect($subscription->refresh()->locale)->toBe('ru');
 });
 
+test('frequency callback persists cadence and refreshes exact controls in subscription scope', function () {
+    config()->set('telegram_notifications.inbound_rate_limit.cache_store', 'array');
+    CarbonImmutable::setTestNow(CarbonImmutable::parse('2026-07-21 12:30:00', 'UTC'));
+    $subscription = TelegramNotification::query()->create([
+        'instance_id' => -1851,
+        'thread_id' => 85,
+        'frequency' => 'day',
+        'send_time' => '14:30:00',
+        'enabled' => true,
+        'next_send_at' => '2026-07-21 14:30:00',
+    ]);
+    $keyboard = null;
+    $gateway = Mockery::mock(TelegramRichMessageGateway::class);
+    $gateway->shouldReceive('updateMessage')->once()->andReturnUsing(
+        function (InputRichMessage $message, InlineKeyboardMarkup $markup) use (&$keyboard): true {
+            $keyboard = $markup;
+
+            return true;
+        },
+    );
+    $callback = telegramSettingsCallback(
+        $subscription,
+        1851,
+        'notifications:frequency:week:'.$subscription->id,
+    );
+
+    $changed = telegramSettings(
+        telegramAdministrator(1851),
+        analyticsCalls: 1,
+        gateway: $gateway,
+    )->updateFrequency($callback);
+
+    $controls = $keyboard->toRequestArray()['inline_keyboard'];
+    expect($changed?->frequency)->toBe('week')
+        ->and($subscription->refresh()->frequency)->toBe('week')
+        ->and($subscription->send_time)->toBe('14:30:00')
+        ->and(array_column($controls[2], 'text'))->toBe(['Ежедневно', '✓ Еженедельно', 'Ежемесячно'])
+        ->and(array_column($controls[2], 'callback_data'))->toBe([
+            'notifications:frequency:day:'.$subscription->id,
+            'notifications:frequency:week:'.$subscription->id,
+            'notifications:frequency:month:'.$subscription->id,
+        ]);
+
+    CarbonImmutable::setTestNow();
+});
+
 test('start with missing thresholds sends localized chartless settings', function () {
     config()->set('telegram_notifications.inbound_rate_limit.cache_store', 'array');
     $subscription = TelegramNotification::query()->create(['instance_id' => 2001, 'locale' => 'en']);
@@ -957,6 +1051,10 @@ test('settings view contains both compact statistics tables and controls without
             ], [
                 ['text' => 'RU', 'callback_data' => 'notifications:locale:ru:'.$subscription->id],
                 ['text' => 'EN', 'callback_data' => 'notifications:locale:en:'.$subscription->id],
+            ], [
+                ['text' => '✓ Ежедневно', 'callback_data' => 'notifications:frequency:day:'.$subscription->id],
+                ['text' => 'Еженедельно', 'callback_data' => 'notifications:frequency:week:'.$subscription->id],
+                ['text' => 'Ежемесячно', 'callback_data' => 'notifications:frequency:month:'.$subscription->id],
             ]],
         ]);
 });
@@ -1203,6 +1301,31 @@ test('a successful occurrence ledger is never reclaimed as stale', function () {
         ->and($claim->notification->refresh()->next_send_at?->equalTo($now->addDay()->startOfDay()))->toBeTrue()
         ->and(TelegramNotificationDelivery::query()->count())->toBe(1);
 });
+
+test('successful delivery advances the configured notification frequency', function (
+    string $frequency,
+    string $expected,
+) {
+    $sentAt = CarbonImmutable::parse('2026-07-21 14:30:00', 'UTC');
+    $subscription = TelegramNotification::query()->create([
+        'instance_id' => 41,
+        'frequency' => $frequency,
+        'send_time' => '14:30:00',
+        'enabled' => true,
+        'next_send_at' => $sentAt,
+    ]);
+    $subscriptions = new TelegramNotificationSubscriptions;
+    $claim = $subscriptions->claimDue($sentAt, 1, 30)->firstOrFail();
+    $subscriptions->renewClaims([$claim->id], (string) $claim->claim_token, $sentAt, 30);
+
+    expect($subscriptions->complete($claim->id, (string) $claim->claim_token, $sentAt))->toBeTrue()
+        ->and($subscription->refresh()->send_time)->toBe('14:30:00')
+        ->and($subscription->next_send_at?->equalTo(CarbonImmutable::parse($expected, 'UTC')))->toBeTrue();
+})->with([
+    'daily' => ['day', '2026-07-22 14:30:00'],
+    'weekly' => ['week', '2026-07-28 14:30:00'],
+    'monthly' => ['month', '2026-08-21 14:30:00'],
+]);
 
 test('429 retry_after persists a non blocking retry and publishes shared cooldown', function () {
     config()->set('telegram_notifications.rate_limit.cache_store', 'array');

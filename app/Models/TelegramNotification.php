@@ -10,13 +10,14 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
- * A recurring daily Telegram notification subscription. All times are UTC.
+ * A recurring Telegram notification subscription. All times are UTC.
  *
  * @property int $id
  * @property int $instance_id
  * @property int|null $thread_id
  * @property string $context_key
  * @property string $locale
+ * @property string $frequency
  * @property string $send_time
  * @property bool $enabled
  * @property CarbonImmutable|null $next_send_at
@@ -24,9 +25,23 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class TelegramNotification extends Model
 {
+    public const FREQUENCY_DAY = 'day';
+
+    public const FREQUENCY_WEEK = 'week';
+
+    public const FREQUENCY_MONTH = 'month';
+
+    /** @var list<string> */
+    public const FREQUENCIES = [
+        self::FREQUENCY_DAY,
+        self::FREQUENCY_WEEK,
+        self::FREQUENCY_MONTH,
+    ];
+
     /** @var array<string, mixed> */
     protected $attributes = [
         'locale' => 'ru',
+        'frequency' => self::FREQUENCY_DAY,
         'send_time' => '00:00:00',
         'enabled' => false,
     ];
@@ -36,6 +51,7 @@ class TelegramNotification extends Model
         'instance_id',
         'thread_id',
         'locale',
+        'frequency',
         'send_time',
         'enabled',
         'next_send_at',
@@ -69,12 +85,23 @@ class TelegramNotification extends Model
         return $instanceId.':'.($threadId === null ? 'root' : $threadId);
     }
 
-    public static function nextOccurrence(string $sendTime, CarbonImmutable $now): CarbonImmutable
-    {
+    public static function nextOccurrence(
+        string $sendTime,
+        CarbonImmutable $now,
+        string $frequency = self::FREQUENCY_DAY,
+    ): CarbonImmutable {
         $now = $now->utc();
         $occurrence = CarbonImmutable::parse($now->toDateString().' '.$sendTime, 'UTC');
 
-        return $occurrence->lessThanOrEqualTo($now) ? $occurrence->addDay() : $occurrence;
+        if ($occurrence->greaterThan($now)) {
+            return $occurrence;
+        }
+
+        return match ($frequency) {
+            self::FREQUENCY_WEEK => $occurrence->addWeek(),
+            self::FREQUENCY_MONTH => $occurrence->addMonthNoOverflow(),
+            default => $occurrence->addDay(),
+        };
     }
 
     /** @return HasMany<TelegramNotificationDelivery, $this> */

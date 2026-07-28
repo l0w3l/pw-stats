@@ -27,6 +27,8 @@ class SettingsRichMessageFactory
 
     public const CALLBACK_LOCALE = 'notifications:locale:';
 
+    public const CALLBACK_FREQUENCY = 'notifications:frequency:';
+
     private readonly TelegramTranslations $translations;
 
     public function __construct(?TelegramTranslations $translations = null)
@@ -133,6 +135,14 @@ class SettingsRichMessageFactory
                 new InlineKeyboardButton('RU', callbackData: self::CALLBACK_LOCALE.'ru:'.$subscription->id),
                 new InlineKeyboardButton('EN', callbackData: self::CALLBACK_LOCALE.'en:'.$subscription->id),
             ],
+            array_map(
+                fn (string $frequency): InlineKeyboardButton => new InlineKeyboardButton(
+                    ($subscription->frequency === $frequency ? '✓ ' : '')
+                        .$this->translations->get("telegram.frequencies.{$frequency}", $locale),
+                    callbackData: self::CALLBACK_FREQUENCY.$frequency.':'.$subscription->id,
+                ),
+                TelegramNotification::FREQUENCIES,
+            ),
         ]);
     }
 

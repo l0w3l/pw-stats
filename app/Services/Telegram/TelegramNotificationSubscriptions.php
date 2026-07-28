@@ -53,6 +53,28 @@ class TelegramNotificationSubscriptions
         return $subscription->refresh();
     }
 
+    public function updateFrequency(
+        TelegramNotification $subscription,
+        string $frequency,
+        ?CarbonImmutable $now = null,
+    ): TelegramNotification {
+        if (! in_array($frequency, TelegramNotification::FREQUENCIES, true)) {
+            throw new InvalidArgumentException('Unsupported Telegram notification frequency.');
+        }
+
+        $subscription->frequency = $frequency;
+        if ($subscription->enabled) {
+            $subscription->next_send_at = TelegramNotification::nextOccurrence(
+                $subscription->send_time,
+                ($now ?? CarbonImmutable::now('UTC'))->utc(),
+                $frequency,
+            );
+        }
+        $subscription->save();
+
+        return $subscription->refresh();
+    }
+
     public function enable(TelegramContext $context, ?CarbonImmutable $now = null): TelegramNotification
     {
         $subscription = $this->findOrCreate($context);
@@ -63,6 +85,7 @@ class TelegramNotificationSubscriptions
             $subscription->next_send_at = TelegramNotification::nextOccurrence(
                 $subscription->send_time,
                 $now,
+                $subscription->frequency,
             );
 
             $subscription->save();
@@ -304,7 +327,11 @@ class TelegramNotificationSubscriptions
                 'claim_expires_at' => null,
             ])->save();
 
-            $nextSendAt = TelegramNotification::nextOccurrence($notification->send_time, $sentAt);
+            $nextSendAt = TelegramNotification::nextOccurrence(
+                $notification->send_time,
+                $sentAt,
+                $notification->frequency,
+            );
             $notification->forceFill([
                 'last_sent_at' => $notification->last_sent_at?->greaterThan($sentAt) === true
                     ? $notification->last_sent_at
@@ -452,12 +479,16 @@ class TelegramNotificationSubscriptions
             return;
         }
 
-        $nextOccurrence = TelegramNotification::nextOccurrence($notification->send_time, $failedAt);
+        $nextOccurrence = TelegramNotification::nextOccurrence(
+            $notification->send_time,
+            $failedAt,
+            $notification->frequency,
+        );
         $notification->forceFill($disableSubscription ? [
             'enabled' => false,
             'next_send_at' => null,
         ] : [
-            // This occurrence is terminal. Move to the next daily occurrence
+            // This occurrence is terminal. Move to the next configured occurrence
             // so it is not reconsidered by every scheduler tick.
             'next_send_at' => $notification->next_send_at?->greaterThan($nextOccurrence) === true
                 ? $notification->next_send_at

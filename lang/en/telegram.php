@@ -32,6 +32,13 @@ return [
         'week' => 'Weekly',
         'month' => 'Monthly',
     ],
+    'monthly_kills' => 'Kills this month: :kills (≈ :time in game)',
+    'duration' => [
+        'days' => 'd',
+        'hours' => 'h',
+        'minutes' => 'min',
+        'seconds' => 'sec',
+    ],
     'empty' => 'No data.',
     'chart' => [
         'caption' => 'Player count history.',

@@ -6,6 +6,7 @@ namespace App\Telegram\Messages;
 
 use App\Data\PixelWorld\Analytics\AnalyticsDigestData;
 use App\Data\PixelWorld\Analytics\LeaderboardAnalyticsData;
+use App\Queries\CurrentMonthKillTotal;
 use App\Queries\CurrentPointsThresholdAnalytics;
 use App\Queries\PeriodPlayerCountTrends;
 use Phptg\BotApi\Type\InputRichMessage;
@@ -15,6 +16,7 @@ class AnalyticsDigestBuilder
     public function __construct(
         private readonly PeriodPlayerCountTrends $trends,
         private readonly CurrentPointsThresholdAnalytics $thresholds,
+        private readonly CurrentMonthKillTotal $monthlyKills,
         private readonly AnalyticsRichMessageFactory $messages,
     ) {}
 
@@ -27,6 +29,7 @@ class AnalyticsDigestBuilder
                 mostActivePlayers: [],
                 momentumPlayers: [],
             ),
+            monthlyKills: $this->monthlyKills->get(),
         );
     }
 
@@ -34,6 +37,10 @@ class AnalyticsDigestBuilder
     {
         $data ??= $this->prepare();
 
-        return $this->messages->make($data->analytics, locale: $locale);
+        return $this->messages->make(
+            $data->analytics,
+            monthlyKills: $data->monthlyKills,
+            locale: $locale,
+        );
     }
 }

@@ -32,6 +32,13 @@ return [
         'week' => 'Еженедельно',
         'month' => 'Ежемесячно',
     ],
+    'monthly_kills' => 'Убийств за месяц: :kills (≈ :time в игре)',
+    'duration' => [
+        'days' => 'д',
+        'hours' => 'ч',
+        'minutes' => 'мин',
+        'seconds' => 'сек',
+    ],
     'empty' => 'Нет данных.',
     'chart' => [
         'caption' => 'История числа игроков.',

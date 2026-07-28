@@ -9,6 +9,7 @@ use App\Models\TelegramNotification;
 use App\Telegram\Messages\AnalyticsRichMessageFactory;
 use App\Telegram\Messages\SettingsRichMessageFactory;
 use Carbon\CarbonImmutable;
+use Phptg\BotApi\Type\InputRichBlockParagraph;
 use Phptg\BotApi\Type\InputRichBlockPhoto;
 use Phptg\BotApi\Type\InputRichBlockSectionHeading;
 use Phptg\BotApi\Type\InputRichBlockTable;
@@ -88,24 +89,28 @@ test('digest renders exact localized player and points tables without a photo', 
     app()->setLocale($locale === 'ru' ? 'en' : 'ru');
 
     // Act: render the digest in the explicitly requested locale.
-    $message = (new AnalyticsRichMessageFactory)->make(localizedAnalytics(), locale: $locale);
+    $message = (new AnalyticsRichMessageFactory)->make(localizedAnalytics(), monthlyKills: 9010, locale: $locale);
     $payload = json_encode($message->toRequestArray(), JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
     $tables = collect($message->blocks)
         ->filter(fn ($block): bool => $block instanceof InputRichBlockTable)
         ->values();
 
     // Assert: totals stay unchanged, threshold orientation is exact, and no graph is emitted.
-    expect($message->blocks)->toHaveCount(3)
+    expect($message->blocks)->toHaveCount(4)
         ->and(array_map(fn (object $block): string => $block::class, $message->blocks))->toBe([
             InputRichBlockSectionHeading::class,
             InputRichBlockTable::class,
             InputRichBlockTable::class,
+            InputRichBlockParagraph::class,
         ])
         ->and($tables->pluck('caption')->all())->toBe(expectedTableTitles($locale))
         ->and(richTableText($tables[0]))->toBe(expectedPlayerTable($locale))
         ->and(richTableText($tables[1]))->toBe(expectedPointsTable($locale))
         ->and(collect($message->blocks)->contains(fn ($block): bool => $block instanceof InputRichBlockPhoto))->toBeFalse()
         ->and($payload)->toContain($heading)
+        ->and($payload)->toContain($locale === 'en'
+            ? 'Kills this month: 9 010 (≈ 1 d 1 h 1 min 40 sec in game)'
+            : 'Убийств за месяц: 9 010 (≈ 1 д 1 ч 1 мин 40 сек в игре)')
         ->and($payload)->not->toContain('Slayer')
         ->and($payload)->not->toContain('16.07.2026')
         ->and($payload)->not->toContain('momentum')

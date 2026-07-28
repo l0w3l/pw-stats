@@ -10,6 +10,7 @@ use App\Data\Telegram\TelegramContext;
 use App\Jobs\SendTelegramNotificationBatch;
 use App\Models\TelegramNotification;
 use App\Models\TelegramNotificationDelivery;
+use App\Queries\CurrentMonthKillTotal;
 use App\Queries\CurrentPointsThresholdAnalytics;
 use App\Queries\PeriodPlayerCountTrends;
 use App\Services\PixelWorld\Charts\PlayerCountChartService;
@@ -191,12 +192,15 @@ test('bounded mixed locale batch loads report data once and shares one chartless
         new PointsThresholdData('week', 100, 50, 20),
         new PointsThresholdData('month', 150, 75, 30),
     ]);
+    $monthlyKills = Mockery::mock(CurrentMonthKillTotal::class);
+    $monthlyKills->shouldReceive('get')->once()->andReturn(9010);
     $charts = Mockery::mock(PlayerCountChartService::class);
     $charts->shouldNotReceive('data', 'generateFromData');
     $chartMedia = Mockery::mock(AnalyticsChartMediaFactory::class);
     $chartMedia->shouldNotReceive('make');
     app()->instance(PeriodPlayerCountTrends::class, $trends);
     app()->instance(CurrentPointsThresholdAnalytics::class, $thresholds);
+    app()->instance(CurrentMonthKillTotal::class, $monthlyKills);
     app()->instance(PlayerCountChartService::class, $charts);
     app()->instance(AnalyticsChartMediaFactory::class, $chartMedia);
     $builder = app(AnalyticsDigestBuilder::class);

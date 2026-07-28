@@ -4,6 +4,7 @@ use App\Models\PixelWorldLeaderboardPeriod;
 use App\Models\PixelWorldLeaderboardPeriodEntry;
 use App\Models\PixelWorldPlayer;
 use App\Models\PixelWorldPlayerTotal;
+use App\Queries\CurrentMonthKillTotal;
 use App\Queries\CurrentPlayerCountAnalytics;
 use App\Queries\CurrentPointsThresholdAnalytics;
 use App\Queries\LeaderboardAnalytics;
@@ -144,6 +145,20 @@ test('per range fallback preserves period analytics when a player total sample i
 
 test('persisted player total query is deterministic when data is absent', function () {
     expect((new CurrentPlayerCountAnalytics)->get())->toBe([]);
+});
+
+test('current month kill total sums points from only the latest persisted month', function () {
+    expect((new CurrentMonthKillTotal)->get())->toBeNull();
+
+    $older = analyticsPeriod('month', '2026-06-01', '2026-06-30', 2, now()->subMonth());
+    analyticsEntry($older, 'older-one', 1, 1000);
+    analyticsEntry($older, 'older-two', 2, 500);
+    $current = analyticsPeriod('month', '2026-07-01', '2026-07-31', 3, now());
+    analyticsEntry($current, 'current-one', 1, 250);
+    analyticsEntry($current, 'current-two', 2, 100);
+    analyticsEntry($current, 'current-three', 3, 16);
+
+    expect((new CurrentMonthKillTotal)->get())->toBe(366);
 });
 
 test('current points thresholds count exact boundaries cumulatively in range order with one query', function () {

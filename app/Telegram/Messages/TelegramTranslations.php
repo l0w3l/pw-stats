@@ -22,9 +22,10 @@ final readonly class TelegramTranslations
             : self::DEFAULT_LOCALE;
     }
 
-    public function get(string $key, ?string $locale): string
+    /** @param array<string, scalar> $replace */
+    public function get(string $key, ?string $locale, array $replace = []): string
     {
-        $value = $this->translator->get($key, [], $this->locale($locale));
+        $value = $this->translator->get($key, $replace, $this->locale($locale));
 
         return is_string($value) ? $value : $key;
     }

@@ -15,6 +15,7 @@ use App\Models\PixelWorldPlayer;
 use App\Models\PixelWorldPlayerTotal;
 use App\Models\TelegramNotification;
 use App\Models\TelegramNotificationDelivery;
+use App\Queries\CurrentMonthKillTotal;
 use App\Queries\CurrentPlayerCountAnalytics;
 use App\Queries\CurrentPointsThresholdAnalytics;
 use App\Queries\LeaderboardAnalytics;
@@ -1154,9 +1155,12 @@ test('scheduled digest prepares period trends and points thresholds and renders 
     $trends->shouldReceive('get')->once()->andReturn($trendData);
     $thresholds = Mockery::mock(CurrentPointsThresholdAnalytics::class);
     $thresholds->shouldReceive('get')->once()->andReturn($thresholdData);
+    $monthlyKills = Mockery::mock(CurrentMonthKillTotal::class);
+    $monthlyKills->shouldReceive('get')->once()->andReturn(9010);
     $builder = new AnalyticsDigestBuilder(
         $trends,
         $thresholds,
+        $monthlyKills,
         new AnalyticsRichMessageFactory,
     );
 
@@ -1169,8 +1173,10 @@ test('scheduled digest prepares period trends and points thresholds and renders 
     $thresholdRows = $russian->blocks[2]->cells;
     expect($prepared->analytics->playerCountTrends)->toBe($trendData)
         ->and($prepared->analytics->pointsThresholds)->toBe($thresholdData)
-        ->and($russian->blocks)->toHaveCount(3)
+        ->and($prepared->monthlyKills)->toBe(9010)
+        ->and($russian->blocks)->toHaveCount(4)
         ->and($russian->blocks[0]->text)->toBe('Pixel World · Статистика')
+        ->and($russian->blocks[3]->text)->toBe('Убийств за месяц: 9 010 (≈ 1 д 1 ч 1 мин 40 сек в игре)')
         ->and($playerRows)->toHaveCount(4)
         ->and(array_map(fn ($cell) => $cell->text, $playerRows[1]))->toBe(['День', '100', '+10'])
         ->and($thresholdRows)->toHaveCount(4)

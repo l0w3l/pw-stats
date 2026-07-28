@@ -27,6 +27,7 @@ class AnalyticsRichMessageFactory
 
     public function make(
         LeaderboardAnalyticsData $analytics,
+        ?int $monthlyKills = null,
         ?string $locale = null,
     ): InputRichMessage {
         $locale = $this->translations->locale($locale);
@@ -53,8 +54,37 @@ class AnalyticsRichMessageFactory
             isStriped: true,
             caption: $this->translations->get('telegram.table_titles.points_thresholds', $locale),
         );
+        if ($monthlyKills !== null) {
+            $blocks[] = new InputRichBlockParagraph($this->translations->get(
+                'telegram.monthly_kills',
+                $locale,
+                [
+                    'kills' => number_format($monthlyKills, 0, '.', ' '),
+                    'time' => $this->formatPlayTime($monthlyKills * 10, $locale),
+                ],
+            ));
+        }
 
         return new InputRichMessage(blocks: $blocks);
+    }
+
+    private function formatPlayTime(int $seconds, string $locale): string
+    {
+        $units = [
+            'days' => [86400, intdiv($seconds, 86400)],
+            'hours' => [3600, intdiv($seconds % 86400, 3600)],
+            'minutes' => [60, intdiv($seconds % 3600, 60)],
+            'seconds' => [1, $seconds % 60],
+        ];
+        $parts = [];
+
+        foreach ($units as $unit => [$size, $value]) {
+            if ($value > 0 || ($size === 1 && $parts === [])) {
+                $parts[] = $value.' '.$this->translations->get("telegram.duration.{$unit}", $locale);
+            }
+        }
+
+        return implode(' ', $parts);
     }
 
     /**

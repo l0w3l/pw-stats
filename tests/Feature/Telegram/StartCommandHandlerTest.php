@@ -2,6 +2,7 @@
 
 use App\Data\PixelWorld\Analytics\PlayerCountTrendData;
 use App\Data\PixelWorld\Analytics\PointsThresholdData;
+use App\Queries\CurrentMonthKillTotal;
 use App\Queries\CurrentPointsThresholdAnalytics;
 use App\Queries\PeriodPlayerCountTrends;
 use App\Telegram\Messages\AnalyticsDigestBuilder;
@@ -18,18 +19,23 @@ test('scheduled digest contains totals and points thresholds without a graph', f
     $thresholds->shouldReceive('get')->once()->andReturn([
         new PointsThresholdData('day', 20, 10, 2),
     ]);
+    $monthlyKills = Mockery::mock(CurrentMonthKillTotal::class);
+    $monthlyKills->shouldReceive('get')->once()->andReturn(366);
 
     $message = (new AnalyticsDigestBuilder(
         $trends,
         $thresholds,
+        $monthlyKills,
         new AnalyticsRichMessageFactory,
     ))->build();
     $tables = collect($message->blocks)->filter(
         fn ($block): bool => $block instanceof InputRichBlockTable,
     );
 
-    expect($message->blocks)->toHaveCount(3)
+    expect($message->blocks)->toHaveCount(4)
         ->and($tables)->toHaveCount(2)
+        ->and(json_encode($message->toRequestArray(), JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE))
+        ->toContain('Убийств за месяц: 366 (≈ 1 ч 1 мин в игре)')
         ->and(collect($message->blocks)->contains(
             fn ($block): bool => $block instanceof InputRichBlockPhoto,
         ))->toBeFalse();

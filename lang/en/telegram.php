@@ -16,7 +16,7 @@ return [
         'period' => 'Period',
         'players' => 'Players',
         'delta' => 'Δ',
-        'points' => 'Points',
+        'points' => 'Kills',
     ],
     'table_titles' => [
         'player_counts' => 'Player counts',

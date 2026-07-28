@@ -1,6 +1,6 @@
 # Player-total retention
 
-`pixel_world_player_totals` remains the minute-level source for existing consumers. The hourly
+`pixel_world_player_totals` remains the two-second source for existing consumers. The hourly
 retention job does not change analytics queries yet. Complete UTC hours older than
 `PIXEL_WORLD_PLAYER_TOTAL_RAW_RETENTION_DAYS` (30 by default) are summarized into
 `pixel_world_player_total_hourlies` before their raw rows are deleted. Each summary preserves

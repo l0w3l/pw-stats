@@ -18,7 +18,7 @@ foreach (LeaderboardRange::cases() as $range) {
 
 Schedule::command('pixel-world:player-totals:collect')
     ->name('pixel-world:player-totals:collect')
-    ->everyMinute()
+    ->everyTwoSeconds()
     ->withoutOverlapping(1)
     ->onOneServer();
 

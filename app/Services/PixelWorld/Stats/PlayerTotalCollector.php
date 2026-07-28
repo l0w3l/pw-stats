@@ -16,7 +16,8 @@ class PlayerTotalCollector
         LeaderboardRange $range,
         ?CarbonImmutable $collectedAt = null,
     ): PixelWorldPlayerTotal {
-        $collectedAt = ($collectedAt ?? CarbonImmutable::now('UTC'))->utc()->startOfMinute();
+        $collectedAt = ($collectedAt ?? CarbonImmutable::now('UTC'))->utc()->startOfSecond();
+        $collectedAt = $collectedAt->setSecond(intdiv($collectedAt->second, 2) * 2);
         $response = $this->leaderboards->page($range, page: 1, limit: 1);
         $writtenAt = CarbonImmutable::now('UTC');
 

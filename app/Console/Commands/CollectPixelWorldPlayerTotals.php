@@ -13,11 +13,11 @@ class CollectPixelWorldPlayerTotals extends Command
 {
     protected $signature = 'pixel-world:player-totals:collect';
 
-    protected $description = 'Collect minute-level Pixel World player totals for every leaderboard range';
+    protected $description = 'Collect Pixel World player totals for every leaderboard range';
 
     public function handle(PlayerTotalCollector $collector): int
     {
-        $collectedAt = CarbonImmutable::now('UTC')->startOfMinute();
+        $collectedAt = CarbonImmutable::now('UTC');
         $completed = 0;
         $failed = 0;
 

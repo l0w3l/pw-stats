@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Schedule;
 
 uses(RefreshDatabase::class);
 
-test('player totals are sampled once per range and UTC minute', function () {
+test('player totals are sampled once per range and UTC two second window', function () {
     $client = Mockery::mock(LeaderboardClient::class);
     $client->shouldReceive('page')
         ->times(3)
@@ -23,15 +23,15 @@ test('player totals are sampled once per range and UTC minute', function () {
             playerTotalResponse(102),
         );
     $collector = new PlayerTotalCollector($client);
-    $minute = CarbonImmutable::parse('2026-07-21 12:34:45', 'UTC');
+    $instant = CarbonImmutable::parse('2026-07-21 12:34:45.500000', 'UTC');
 
-    $first = $collector->collect(LeaderboardRange::Day, $minute);
-    $updated = $collector->collect(LeaderboardRange::Day, $minute->addSeconds(10));
-    $next = $collector->collect(LeaderboardRange::Day, $minute->addMinute());
+    $first = $collector->collect(LeaderboardRange::Day, $instant);
+    $updated = $collector->collect(LeaderboardRange::Day, $instant->addMilliseconds(400));
+    $next = $collector->collect(LeaderboardRange::Day, $instant->addSecond());
 
     expect($first->id)->toBe($updated->id)
         ->and($updated->total)->toBe(101)
-        ->and($updated->collected_at?->toIso8601String())->toBe('2026-07-21T12:34:00+00:00')
+        ->and($updated->collected_at?->toIso8601String())->toBe('2026-07-21T12:34:44+00:00')
         ->and($next->id)->not->toBe($first->id)
         ->and(PixelWorldPlayerTotal::query()->count())->toBe(2);
 });
@@ -57,7 +57,7 @@ test('player total command persists day week and month in the same minute', func
     expect(PixelWorldPlayerTotal::query()->orderBy('range')->pluck('total', 'range')->all())
         ->toBe(['day' => 10, 'month' => 30, 'week' => 20])
         ->and(PixelWorldPlayerTotal::query()->pluck('collected_at')->unique()->sole()->toDateTimeString())
-        ->toBe('2026-07-21 12:34:00');
+        ->toBe('2026-07-21 12:34:44');
 
     CarbonImmutable::setTestNow();
 });
@@ -81,12 +81,15 @@ test('player total command collects every range and continues after one failure'
         ->assertFailed();
 });
 
-test('player total command is scheduled every minute', function () {
+test('player total command is scheduled every two seconds', function () {
     config()->set('cache.default', 'array');
 
-    $this->artisan('schedule:list')
-        ->expectsOutputToContain('pixel-world:player-totals:collect')
-        ->assertSuccessful();
+    $event = collect(Schedule::events())
+        ->first(fn ($event): bool => $event->description === 'pixel-world:player-totals:collect');
+
+    expect($event)->not->toBeNull()
+        ->and($event->repeatSeconds)->toBe(2)
+        ->and($event->withoutOverlapping)->toBeTrue();
 });
 
 test('full leaderboard collection uses staggered range schedules', function () {

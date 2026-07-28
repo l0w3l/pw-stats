@@ -17,7 +17,7 @@ class PlayerTotalCollector
         ?CarbonImmutable $collectedAt = null,
     ): PixelWorldPlayerTotal {
         $collectedAt = ($collectedAt ?? CarbonImmutable::now('UTC'))->utc()->startOfSecond();
-        $collectedAt = $collectedAt->setSecond(intdiv($collectedAt->second, 2) * 2);
+        $collectedAt = $collectedAt->setSecond(intdiv($collectedAt->second, 5) * 5);
         $response = $this->leaderboards->page($range, page: 1, limit: 1);
         $writtenAt = CarbonImmutable::now('UTC');
 

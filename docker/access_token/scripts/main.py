@@ -1,6 +1,6 @@
 import json
-import urllib.parse
 import logging
+import urllib.parse
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -11,6 +11,7 @@ from telethon.tl.functions.messages import RequestWebViewRequest, RequestMainWeb
 from telethon.tl.types import InputUser
 
 from config import settings
+from web_app_data import extract_web_app_data
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -50,16 +51,7 @@ async def get_web_view_data(
 
         result = await client(RequestWebViewRequest(**kwargs))
 
-        logger.info(f"Full URL: {result.url}")
-
-        if "#tgWebAppData=" not in result.url:
-            logger.error("No tgWebAppData in response")
-            return None
-
-        raw_data = result.url.split("#tgWebAppData=")[1]
-        decoded = urllib.parse.unquote(raw_data)
-
-        logger.info(f"Decoded data: {decoded}")
+        raw_data, decoded = extract_web_app_data(result.url)
 
         return {
             "raw": raw_data,
@@ -98,16 +90,7 @@ async def get_main_web_view_data(
 
         result = await client(RequestMainWebViewRequest(**kwargs))
 
-        logger.info(f"Full URL: {result.url}")
-
-        if "#tgWebAppData=" not in result.url:
-            logger.error("No tgWebAppData in response")
-            return None
-
-        raw_data = result.url.split("#tgWebAppData=")[1]
-        decoded = urllib.parse.unquote(raw_data)
-
-        logger.info(f"Decoded data: {decoded}")
+        raw_data, decoded = extract_web_app_data(result.url)
 
         return {
             "raw": raw_data,

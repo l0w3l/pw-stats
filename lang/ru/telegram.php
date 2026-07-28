@@ -18,6 +18,10 @@ return [
         'delta' => 'Δ',
         'points' => 'Очки',
     ],
+    'table_titles' => [
+        'player_counts' => 'Количество игроков',
+        'points_thresholds' => 'Игроки по очкам',
+    ],
     'controls' => [
         'enable' => '🔔 Включить',
         'disable' => '🔕 Выключить',

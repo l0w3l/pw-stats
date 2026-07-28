@@ -75,6 +75,14 @@ function expectedPointsTable(string $locale): array
     ];
 }
 
+/** @return list<string> */
+function expectedTableTitles(string $locale): array
+{
+    return $locale === 'en'
+        ? ['Player counts', 'Players by points']
+        : ['Количество игроков', 'Игроки по очкам'];
+}
+
 test('digest renders exact localized player and points tables without a photo', function (string $locale, string $heading) {
     // Arrange: preserve the application locale and include present, missing, and zero thresholds.
     app()->setLocale($locale === 'ru' ? 'en' : 'ru');
@@ -93,6 +101,7 @@ test('digest renders exact localized player and points tables without a photo', 
             InputRichBlockTable::class,
             InputRichBlockTable::class,
         ])
+        ->and($tables->pluck('caption')->all())->toBe(expectedTableTitles($locale))
         ->and(richTableText($tables[0]))->toBe(expectedPlayerTable($locale))
         ->and(richTableText($tables[1]))->toBe(expectedPointsTable($locale))
         ->and(collect($message->blocks)->contains(fn ($block): bool => $block instanceof InputRichBlockPhoto))->toBeFalse()
@@ -128,6 +137,7 @@ test('unsupported and missing locales fall back to Russian without mutating the 
     expect($payload)->toContain($factory === 'digest' ? 'Pixel World · Статистика' : 'Pixel World · Настройки')
         ->and(richTableText($tables[0]))->toBe(expectedPlayerTable('ru'))
         ->and(richTableText($tables[1]))->toBe(expectedPointsTable('ru'))
+        ->and($tables->pluck('caption')->all())->toBe(expectedTableTitles('ru'))
         ->and(collect($message->blocks)->contains(fn ($block): bool => $block instanceof InputRichBlockPhoto))->toBeFalse()
         ->and(app()->getLocale())->toBe('en');
 })->with([
@@ -184,6 +194,7 @@ test('settings contains only localized statistics and exact RU and EN controls',
             InputRichBlockTable::class,
             InputRichBlockTable::class,
         ])
+        ->and($tables->pluck('caption')->all())->toBe(expectedTableTitles($locale))
         ->and(richTableText($tables[0]))->toBe(expectedPlayerTable($locale))
         ->and(richTableText($tables[1]))->toBe(expectedPointsTable($locale))
         ->and(collect($view->message->blocks)->contains(fn ($block): bool => $block instanceof InputRichBlockPhoto))->toBeFalse()

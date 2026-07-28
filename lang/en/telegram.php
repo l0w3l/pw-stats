@@ -18,6 +18,10 @@ return [
         'delta' => 'Δ',
         'points' => 'Points',
     ],
+    'table_titles' => [
+        'player_counts' => 'Player counts',
+        'points_thresholds' => 'Players by points',
+    ],
     'controls' => [
         'enable' => '🔔 Enable',
         'disable' => '🔕 Disable',

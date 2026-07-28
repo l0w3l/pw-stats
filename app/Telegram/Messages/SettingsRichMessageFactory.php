@@ -52,11 +52,13 @@ class SettingsRichMessageFactory
                 cells: $this->playerCountRows($analytics, $locale),
                 isBordered: true,
                 isStriped: true,
+                caption: $this->translations->get('telegram.table_titles.player_counts', $locale),
             );
             $blocks[] = new InputRichBlockTable(
                 cells: $this->pointsThresholdRows($analytics, $locale),
                 isBordered: true,
                 isStriped: true,
+                caption: $this->translations->get('telegram.table_titles.points_thresholds', $locale),
             );
         }
 
